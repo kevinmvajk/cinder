@@ -122,7 +122,7 @@ class DateraDriver(san.SanISCSIDriver):
         2.0 - Update For Datera API v2
         2.1 - Multipath, ACL and reorg
     """
-    VERSION = '2.0'
+    VERSION = '2.1'
 
     def __init__(self, *args, **kwargs):
         super(DateraDriver, self).__init__(*args, **kwargs)
