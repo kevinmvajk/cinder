@@ -17,7 +17,10 @@ import json
 import time
 import uuid
 import functools
-# import re
+import types
+import abc
+import inspect
+import logging as py_logging
 
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -29,7 +32,7 @@ import ipaddress
 
 from cinder import context
 from cinder import exception
-from cinder.i18n import _, _LE, _LI
+from cinder.i18n import _, _LE, _LI, _LW
 from cinder import utils
 from cinder.volume.drivers.san import san
 from cinder.volume import qos_specs
@@ -51,7 +54,7 @@ d_opts = [
                help='Datera API version.'),
     cfg.StrOpt('datera_num_replicas',
                default='3',
-               help='Number of replicas to create of an inode.'),
+               help='Number of replicas to create a volume.'),
     cfg.StrOpt('datera_503_timeout',
                default='120',
                help='Timeout for HTTP 503 retry messages'),
@@ -61,6 +64,9 @@ d_opts = [
     cfg.BoolOpt('datera_acl_allow_all',
                 default=False,
                 help="True to set acl 'allow_all' on volumes created"),
+    cfg.BoolOpt('datera_debug',
+                default=False,
+                help="True to set function arg and return logging")
 ]
 
 
@@ -70,6 +76,10 @@ CONF.register_opts(d_opts)
 
 DEFAULT_STORAGE_NAME = 'storage-1'
 DEFAULT_VOLUME_NAME = 'volume-1'
+
+TRACE_METHOD = False
+TRACE_API = False
+VALID_TRACE_FLAGS = {'method', 'api'}
 
 # Recursive dict to assemble basic url structure for the most common
 # API URL endpoints. Most others are constructed from these
@@ -112,6 +122,122 @@ def _authenticated(func):
     return func_wrapper
 
 
+def trace_method(f):
+    """Decorates a function if TRACE_METHOD is true."""
+    @functools.wraps(f)
+    def trace_method_logging_wrapper(*args, **kwargs):
+        if TRACE_METHOD:
+            return trace(f)(*args, **kwargs)
+        return f(*args, **kwargs)
+    return trace_method_logging_wrapper
+
+
+def trace(f):
+    """Trace calls to the decorated function.
+
+    This decorator should always be defined as the outermost decorator so it
+    is defined last. This is important so it does not interfere
+    with other decorators.
+
+    Using this decorator on a function will cause its execution to be logged at
+    `DEBUG` level with arguments, return values, and exceptions.
+
+    :returns a function decorator
+    """
+
+    func_name = f.__name__
+
+    @functools.wraps(f)
+    def trace_logging_wrapper(*args, **kwargs):
+        if len(args) > 0:
+            maybe_self = args[0]
+        else:
+            maybe_self = kwargs.get('self', None)
+
+        if maybe_self and hasattr(maybe_self, '__module__'):
+            logger = logging.getLogger(maybe_self.__module__)
+        else:
+            logger = LOG
+
+        # NOTE(ameade): Don't bother going any further if DEBUG log level
+        # is not enabled for the logger.
+        if not logger.isEnabledFor(py_logging.DEBUG):
+            return f(*args, **kwargs)
+
+        all_args = inspect.getcallargs(f, *args, **kwargs)
+        logger.debug('==> %(func)s: call %(all_args)r',
+                     {'func': func_name, 'all_args': all_args})
+
+        start_time = time.time() * 1000
+        try:
+            result = f(*args, **kwargs)
+        except Exception as exc:
+            total_time = int(round(time.time() * 1000)) - start_time
+            logger.debug('<== %(func)s: exception (%(time)dms) %(exc)r',
+                         {'func': func_name,
+                          'time': total_time,
+                          'exc': exc})
+            raise
+        total_time = int(round(time.time() * 1000)) - start_time
+
+        logger.debug('<== %(func)s: return (%(time)dms) %(result)r',
+                     {'func': func_name,
+                      'time': total_time,
+                      'result': result})
+        return result
+    return trace_logging_wrapper
+
+
+def setup_tracing(trace_flags):
+    """Set global variables for each trace flag.
+
+    Sets variables TRACE_METHOD and TRACE_API, which represent
+    whether to log method and api traces.
+
+    :param trace_flags: a list of strings
+    """
+    global TRACE_METHOD
+    global TRACE_API
+    try:
+        trace_flags = [flag.strip() for flag in trace_flags]
+    except TypeError:  # Handle when trace_flags is None or a test mock
+        trace_flags = []
+    for invalid_flag in (set(trace_flags) - VALID_TRACE_FLAGS):
+        LOG.warning(_LW('Invalid trace flag: %s'), invalid_flag)
+    TRACE_METHOD = 'method' in trace_flags
+    TRACE_API = 'api' in trace_flags
+
+
+class TraceWrapperMetaclass(type):
+
+    """Metaclass that wraps all methods of a class with trace_method.
+
+    This metaclass will cause every function inside of the class to be
+    decorated with the trace_method decorator.
+
+    To use the metaclass you define a class like so:
+    @six.add_metaclass(utils.TraceWrapperMetaclass)
+    class MyClass(object):
+    """
+    def __new__(meta, classname, bases, classDict):
+        newClassDict = {}
+        for attributeName, attribute in classDict.items():
+            if isinstance(attribute, types.FunctionType):
+                # replace it with a wrapped version
+                attribute = functools.update_wrapper(trace_method(attribute),
+                                                     attribute)
+            newClassDict[attributeName] = attribute
+
+        return type.__new__(meta, classname, bases, newClassDict)
+
+
+class TraceWrapperWithABCMetaclass(abc.ABCMeta, TraceWrapperMetaclass):
+
+    """Metaclass that wraps all methods of a class with trace."""
+    pass
+
+
+@six.add_metaclass(TraceWrapperWithABCMetaclass)
 class DateraDriver(san.SanISCSIDriver):
 
     """The OpenStack Datera Driver
@@ -142,6 +268,10 @@ class DateraDriver(san.SanISCSIDriver):
                               if self.allow_all
                               else 'deny_all')
         self.driver_prefix = str(uuid.uuid4())[:4]
+        self.datera_debug = self.configuration.datera_debug
+
+        if self.datera_debug:
+            setup_tracing(['method'])
 
     def _login(self):
         """Use the san_login and san_password to set self.auth_token."""
