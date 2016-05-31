@@ -272,7 +272,7 @@ class DateraDriver(san.SanISCSIDriver):
             body=data)
         # Online Volume, if it was online before
         if reonline:
-            self.create_export(None, volume)
+            self.create_export(None, volume, None)
 
     def create_cloned_volume(self, volume, src_vref):
         src = "/" + URL_TEMPLATES['vol_inst'].format(src_vref['id'])
@@ -345,10 +345,15 @@ class DateraDriver(san.SanISCSIDriver):
                     'discard': False}}
 
     def create_export(self, context, volume, connector):
+        # Online volume in case it hasn't been already
+        url = URL_TEMPLATES['ai_inst'].format(volume['id'])
+        data = {
+            'admin_state': 'online'
+        }
+        self._issue_api_request(url, method='put', body=data)
         # Check if we've already setup everything for this volume
         url = (URL_TEMPLATES['si'].format(volume['id']))
         storage_instances = self._issue_api_request(url)
-        self._issue_api_request(url)
         # Handle adding initiator to product if necessary
         # Then add initiator to ACL
         if connector and connector.get('initiator') and not self.allow_all:
