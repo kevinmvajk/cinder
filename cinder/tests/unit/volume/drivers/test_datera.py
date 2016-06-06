@@ -23,10 +23,6 @@ from cinder.volume.drivers import datera
 from cinder.volume import volume_types
 
 
-DEFAULT_STORAGE_NAME = datera.DEFAULT_STORAGE_NAME
-DEFAULT_VOLUME_NAME = datera.DEFAULT_VOLUME_NAME
-
-
 class DateraVolumeTestCase(test.TestCase):
 
     def setUp(self):
@@ -48,6 +44,8 @@ class DateraVolumeTestCase(test.TestCase):
 
         mock_exec = mock.Mock()
         mock_exec.return_value = ('', '')
+
+        datera.DEFAULT_SI_SLEEP = 0.01
 
         self.driver = datera.DateraDriver(execute=mock_exec,
                                           configuration=self.cfg)
@@ -74,9 +72,9 @@ class DateraVolumeTestCase(test.TestCase):
         def _progress_api_return(mock_api):
             if mock_api.retry_count == 1:
                 _bad_vol_ai = stub_single_ai.copy()
-                _bad_vol_ai['storage_instances'][
-                    DEFAULT_STORAGE_NAME]['volumes'][DEFAULT_VOLUME_NAME][
-                        'op_status'] = 'unavailable'
+                _bad_vol_ai['storage_instances']['storage-1'
+                                                 ]['volumes']['volume-1'][
+                    'op_status'] = 'unavailable'
                 return _bad_vol_ai
             else:
                 self.mock_api.retry_count += 1
@@ -415,6 +413,7 @@ stub_app_instance = {
                 },
                 "creation_type": "user",
                 "descr": "c20aba21-6ef6-446b-b374-45733b4883ba__ST__storage-1",
+                "op_state": "available",
                 "name": "storage-1",
                 "path": "/app_instances/c20aba21-6ef6-446b-b374-"
                         "45733b4883ba/storage_instances/storage-1",

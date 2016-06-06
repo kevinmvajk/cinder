@@ -64,6 +64,8 @@ CONF = cfg.CONF
 CONF.import_opt('driver_use_ssl', 'cinder.volume.driver')
 CONF.register_opts(d_opts)
 
+DEFAULT_SI_SLEEP = 3
+
 # Recursive dict to assemble basic url structure for the most common
 # API URL endpoints. Most others are constructed from these
 URL_TEMPLATES = {
@@ -120,7 +122,6 @@ class DateraDriver(san.SanISCSIDriver):
     def __init__(self, *args, **kwargs):
         super(DateraDriver, self).__init__(*args, **kwargs)
         self.configuration.append_config_values(d_opts)
-        self.num_replicas = 3
         self.username = self.configuration.san_login
         self.password = self.configuration.san_password
         self.cluster_stats = {}
@@ -370,11 +371,16 @@ class DateraDriver(san.SanISCSIDriver):
                                         body=data)
 
         if connector and connector.get('ip'):
-            # Determine IP Pool from IP and update storage_instance
             try:
-                initiator_ip_pool_path = self._get_ip_pool_for_string_ip(
-                    connector['ip'])
-                policies = self._get_policies_for_resource(volume)
+                # Case where volume_type has non default IP Pool info
+                if policies['ip_pool'] != 'default':
+                    initiator_ip_pool_path = self._issue_api_request(
+                        "access_network_ip_pools/{}".format(
+                            policies['ip_pool']))['path']
+                # Fallback to trying reasonable IP based guess
+                else:
+                    initiator_ip_pool_path = self._get_ip_pool_for_string_ip(
+                        connector['ip'])
 
                 ip_pool_url = URL_TEMPLATES['si_inst'](
                     policies['default_storage_name']).format(
@@ -386,6 +392,9 @@ class DateraDriver(san.SanISCSIDriver):
             except exception.DateraAPIException:
                 # Datera product 1.0 support
                 pass
+
+        # Check to ensure we're ready for go-time
+        self._si_poll(volume, policies)
 
     def detach_volume(self, context, volume, attachment=None):
         url = URL_TEMPLATES['ai_inst']().format(volume['id'])
@@ -611,6 +620,14 @@ class DateraDriver(san.SanISCSIDriver):
             "boolean",
             default=False)
 
+        self._set_property(
+            properties,
+            "DF:ip_pool",
+            "Datera IP Pool",
+            _("Specifies IP pool to use for volume"),
+            "string",
+            default="default")
+
         # ###### QoS Settings ###### #
         self._set_property(
             properties,
@@ -737,6 +754,25 @@ class DateraDriver(san.SanISCSIDriver):
             except ValueError:
                 pass
         return policies
+
+    def _si_poll(self, volume, policies):
+        # Initial 4 second sleep required for some Datera versions
+        time.sleep(DEFAULT_SI_SLEEP)
+        TIMEOUT = 10
+        retry = 0
+        check_url = URL_TEMPLATES['si_inst'](
+            policies['default_storage_name']).format(volume['id'])
+        poll = True
+        while poll and not retry >= TIMEOUT:
+            retry += 1
+            si = self._issue_api_request(check_url)
+            if si['op_state'] == 'available':
+                poll = False
+            else:
+                time.sleep(1)
+        if retry >= TIMEOUT:
+            raise exception.VolumeDriverException(
+                message=_('Resource not ready.'))
 
     def _update_qos(self, resource, policies):
         url = URL_TEMPLATES['vol_inst'](
