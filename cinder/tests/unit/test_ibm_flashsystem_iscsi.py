@@ -261,3 +261,85 @@ class FlashSystemISCSIDriverTestCase(test.TestCase):
 
         # case 4: If there is no vdisk mapped to host, host should be removed
         self.assertIsNone(self.driver._get_host_from_connector(self.connector))
+
+    def test_terminate_connection_with_normal_path(self):
+        connector = {'host': 'flashsystem-host',
+                     'wwnns': ['10000090fa17311e', '10000090fa17311f'],
+                     'wwpns': ['20000090fa17311e', '20000090fa17311f'],
+                     'initiator': 'iqn.1993-08.org.debian:01:89ad29bbdc43'}
+        # create test volume
+        volume_iscsi = self._generate_vol_info(None)
+        self.driver.create_volume(volume_iscsi)
+
+        # normal connection test
+        self.driver.initialize_connection(volume_iscsi, connector)
+        host = self.driver._get_host_from_connector(connector)
+        self.assertIsNotNone(host)
+        self.driver.terminate_connection(volume_iscsi, connector)
+        host = self.driver._get_host_from_connector(connector)
+        self.assertIsNone(host)
+
+        # clean environment
+        self.driver.delete_volume(volume_iscsi)
+
+    def test_terminate_connection_with_resource_leak_check(self):
+        connector = {'host': 'flashsystem-host',
+                     'wwnns': ['10000090fa17311e', '10000090fa17311f'],
+                     'wwpns': ['20000090fa17311e', '20000090fa17311f'],
+                     'initiator': 'iqn.1993-08.org.debian:01:89ad29bbdc43'}
+        # create test volume
+        volume_iscsi = self._generate_vol_info(None)
+        self.driver.create_volume(volume_iscsi)
+
+        # volume mapping removed before terminate connection
+        self.driver.initialize_connection(volume_iscsi, connector)
+        host = self.driver._get_host_from_connector(connector)
+        self.assertIsNotNone(host)
+        rmmap_cmd = {'host': host, 'obj': volume_iscsi['name']}
+        self.sim._cmd_rmvdiskhostmap(**rmmap_cmd)
+        self.driver.terminate_connection(volume_iscsi, connector)
+        host = self.driver._get_host_from_connector(connector)
+        self.assertIsNone(host)
+
+        # clean environment
+        self.driver.delete_volume(volume_iscsi)
+
+    def test_flashsystem_find_host_exhaustive(self):
+        # case 1: create host and find it
+        self.sim.set_protocol('iSCSI')
+        self._set_flag('flashsystem_connection_protocol', 'iSCSI')
+        conn1 = {
+            'host': 'flashsystem-01',
+            'wwnns': ['1111111111abcdef', '1111111111abcdeg'],
+            'wwpns': ['1111111111000001', '1111111111000002'],
+            'initiator': 'iqn.111111'}
+        conn2 = {
+            'host': 'flashsystem-02',
+            'wwnns': ['2222222222abcdef', '2222222222abcdeg'],
+            'wwpns': ['2222222222000001', '2222222222000002'],
+            'initiator': 'iqn.222222'}
+        conn3 = {
+            'host': 'flashsystem-03',
+            'wwnns': ['3333333333abcdef', '3333333333abcdeg'],
+            'wwpns': ['3333333333000001', '3333333333000002'],
+            'initiator': 'iqn.333333'}
+        host1 = self.driver._create_host(conn1)
+        host2 = self.driver._create_host(conn2)
+        self.assertEqual(
+            host2,
+            self.driver._find_host_exhaustive(conn2, [host1, host2]))
+        self.assertIsNone(self.driver._find_host_exhaustive(conn3,
+                                                            [host1, host2]))
+
+        # case 2: hosts contains non-existent host info
+        with mock.patch.object(FlashSystemFakeISCSIDriver,
+                               '_ssh') as mock_ssh:
+            mock_ssh.return_value = ("pass", "")
+            self.driver._find_host_exhaustive(conn1, [host2])
+            self.assertFalse(mock_ssh.called)
+
+        # clear environment
+        self.driver._delete_host(host1)
+        self.driver._delete_host(host2)
+        self.sim.set_protocol('iSCSI')
+        self._reset_flags()

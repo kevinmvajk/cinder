@@ -795,7 +795,7 @@ class TestFetchToVolumeFormat(test.TestCase):
         tmp = mock_temp.return_value.__enter__.return_value
         image_service.show.return_value = {'disk_format': 'raw',
                                            'size': 41126400}
-        image_size_m = math.ceil(41126400 / units.Mi)
+        image_size_m = math.ceil(float(41126400) / units.Mi)
 
         output = image_utils.fetch_to_volume_format(
             ctxt, image_service, image_id, dest, volume_format, blocksize,
@@ -925,7 +925,7 @@ class TestFetchToVolumeFormat(test.TestCase):
         data = mock_info.return_value
         data.file_format = volume_format
         data.backing_file = None
-        data.virtual_size = 4321 * 1024 ** 3
+        data.virtual_size = int(1234.5 * units.Gi)
         tmp = mock_temp.return_value.__enter__.return_value
 
         self.assertRaises(
@@ -1251,12 +1251,13 @@ class TestVhdUtils(test.TestCase):
         mock_exec.assert_called_once_with('vhd-util', 'coalesce', '-n',
                                           vhd_path)
 
+    @mock.patch('cinder.image.image_utils.temporary_dir')
     @mock.patch('cinder.image.image_utils.coalesce_vhd')
     @mock.patch('cinder.image.image_utils.resize_vhd')
     @mock.patch('cinder.image.image_utils.get_vhd_size')
     @mock.patch('cinder.image.image_utils.utils.execute')
     def test_coalesce_chain(self, mock_exec, mock_size, mock_resize,
-                            mock_coal):
+                            mock_coal, mock_temp):
         vhd_chain = (mock.sentinel.first,
                      mock.sentinel.second,
                      mock.sentinel.third,

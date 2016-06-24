@@ -44,6 +44,7 @@ from oslo_utils import units
 from cinder import context
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
+from cinder import interface
 from cinder.objects import fields
 from cinder.volume import driver
 from cinder.volume.drivers.san import san
@@ -120,6 +121,7 @@ extra_specs_value_map = {
 }
 
 
+@interface.volumedriver
 class HPELeftHandISCSIDriver(driver.ISCSIDriver):
     """Executes REST commands relating to HPE/LeftHand SAN ISCSI volumes.
 
@@ -155,9 +157,10 @@ class HPELeftHandISCSIDriver(driver.ISCSIDriver):
         2.0.6 - Update replication to version 2.1
         2.0.7 - Fixed bug #1554746, Create clone volume with new size.
         2.0.8 - Add defaults for creating a replication client, bug #1556331
+        2.0.9 - Fix terminate connection on failover
     """
 
-    VERSION = "2.0.8"
+    VERSION = "2.0.9"
 
     device_stats = {}
 
@@ -522,7 +525,7 @@ class HPELeftHandISCSIDriver(driver.ISCSIDriver):
                                    'snapshotName': snapshot_name}
                 snap_set.append(snap_set_member)
                 snapshot_update = {'id': snapshot['id'],
-                                   'status': 'available'}
+                                   'status': fields.SnapshotStatus.AVAILABLE}
                 snapshot_model_updates.append(snapshot_update)
 
             source_volume_id = snap_set[0]['volumeId']
@@ -562,20 +565,20 @@ class HPELeftHandISCSIDriver(driver.ISCSIDriver):
                 snap_name = snap_name_base + "-" + six.text_type(i)
                 snap_info = client.getSnapshotByName(snap_name)
                 client.deleteSnapshot(snap_info['id'])
-                snapshot_update['status'] = 'deleted'
+                snapshot_update['status'] = fields.SnapshotStatus.DELETED
             except hpeexceptions.HTTPServerError as ex:
                 in_use_msg = ('cannot be deleted because it is a clone '
                               'point')
                 if in_use_msg in ex.get_description():
                     LOG.error(_LE("The snapshot cannot be deleted because "
                                   "it is a clone point."))
-                snapshot_update['status'] = 'error'
+                snapshot_update['status'] = fields.SnapshotStatus.ERROR
             except Exception as ex:
                 LOG.error(_LE("There was an error deleting snapshot %(id)s: "
-                              "%(error)."),
+                              "%(error)s."),
                           {'id': snapshot['id'],
                            'error': six.text_type(ex)})
-                snapshot_update['status'] = 'error'
+                snapshot_update['status'] = fields.SnapshotStatus.ERROR
             snapshot_model_updates.append(snapshot_update)
 
         self._logout(client)
@@ -747,6 +750,22 @@ class HPELeftHandISCSIDriver(driver.ISCSIDriver):
 
             if removeServer:
                 client.deleteServer(server_info['id'])
+        except hpeexceptions.HTTPNotFound as ex:
+            # If a host is failed-over, we want to allow the detach to
+            # to 'succeed' when it cannot find the host. We can simply
+            # return out of the terminate connection in order for things
+            # to be updated correctly.
+            if self._active_backend_id:
+                LOG.warning(_LW("Because the host is currently in a "
+                                "failed-over state, the volume will not "
+                                "be properly detached from the primary "
+                                "array. The detach will be considered a "
+                                "success as far as Cinder is concerned. "
+                                "The volume can now be attached to the "
+                                "secondary target."))
+                return
+            else:
+                raise exception.VolumeBackendAPIException(ex)
         except Exception as ex:
             raise exception.VolumeBackendAPIException(ex)
         finally:

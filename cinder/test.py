@@ -33,7 +33,6 @@ from oslo_concurrency import lockutils
 from oslo_config import cfg
 from oslo_config import fixture as config_fixture
 from oslo_log.fixture import logging_error as log_fixture
-from oslo_log import log
 from oslo_messaging import conffixture as messaging_conffixture
 from oslo_utils import strutils
 from oslo_utils import timeutils
@@ -41,6 +40,7 @@ from oslotest import moxstubout
 import testtools
 
 from cinder.common import config  # noqa Need to register global_opts
+from cinder import coordination
 from cinder.db import migration
 from cinder.db.sqlalchemy import api as sqla_api
 from cinder import i18n
@@ -53,8 +53,6 @@ from cinder.tests.unit import fake_notifier
 
 
 CONF = cfg.CONF
-
-LOG = log.getLogger(__name__)
 
 _DB_CACHE = None
 
@@ -234,6 +232,11 @@ class TestCase(testtools.TestCase):
         # get method in one test it would carry on to the next test.  So we
         # clear out the cache.
         sqla_api._GET_METHODS = {}
+
+        self.override_config('backend_url', 'file://' + lock_path,
+                             group='coordination')
+        coordination.COORDINATOR.start()
+        self.addCleanup(coordination.COORDINATOR.stop)
 
     def _restore_obj_registry(self):
         objects_base.CinderObjectRegistry._registry._obj_classes = \

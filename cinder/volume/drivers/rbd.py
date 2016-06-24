@@ -30,6 +30,7 @@ from six.moves import urllib
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
 from cinder.image import image_utils
+from cinder import interface
 from cinder import utils
 from cinder.volume import driver
 
@@ -261,9 +262,10 @@ class RADOSClient(object):
         return int(features)
 
 
+@interface.volumedriver
 class RBDDriver(driver.TransferVD, driver.ExtendVD,
                 driver.CloneableImageVD, driver.SnapshotVD,
-                driver.MigrateVD, driver.BaseVD):
+                driver.MigrateVD, driver.ManageableVD, driver.BaseVD):
     """Implements RADOS block device (RBD) volume commands."""
 
     VERSION = '1.2.0'
@@ -692,11 +694,11 @@ class RBDDriver(driver.TransferVD, driver.ExtendVD,
             try:
                 snaps = rbd_image.list_snaps()
                 for snap in snaps:
-                    if snap.name.endswith('.clone_snap'):
+                    if snap['name'].endswith('.clone_snap'):
                         LOG.debug("volume has clone snapshot(s)")
                         # We grab one of these and use it when fetching parent
                         # info in case the volume has been flattened.
-                        clone_snap = snap.name
+                        clone_snap = snap['name']
                         break
 
                     raise exception.VolumeIsBusy(volume_name=volume_name)
@@ -820,6 +822,7 @@ class RBDDriver(driver.TransferVD, driver.ExtendVD,
                                    volume.name),
                 'hosts': hosts,
                 'ports': ports,
+                'cluster_name': self.configuration.rbd_cluster_name,
                 'auth_enabled': (self.configuration.rbd_user is not None),
                 'auth_username': self.configuration.rbd_user,
                 'secret_type': 'ceph',
@@ -1055,7 +1058,7 @@ class RBDDriver(driver.TransferVD, driver.ExtendVD,
             # RBD image size is returned in bytes.  Attempt to parse
             # size as a float and round up to the next integer.
             try:
-                convert_size = int(math.ceil(int(image_size))) / units.Gi
+                convert_size = int(math.ceil(float(image_size) / units.Gi))
                 return convert_size
             except ValueError:
                 exception_message = (_("Failed to manage existing volume "
@@ -1066,6 +1069,9 @@ class RBDDriver(driver.TransferVD, driver.ExtendVD,
                                         'size': image_size})
                 raise exception.VolumeBackendAPIException(
                     data=exception_message)
+
+    def unmanage(self, volume):
+        pass
 
     def update_migrated_volume(self, ctxt, volume, new_volume,
                                original_volume_status):

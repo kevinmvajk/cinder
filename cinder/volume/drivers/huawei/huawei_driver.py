@@ -26,6 +26,7 @@ from oslo_utils import units
 from cinder import context
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
+from cinder import interface
 from cinder import utils
 from cinder.volume import driver
 from cinder.volume.drivers.huawei import constants
@@ -1472,6 +1473,15 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                         {'snapshot_id': snapshot['id'],
                          'snapshot_name': snapshot_name})
 
+    def remove_host_with_check(self, host_id):
+        wwns_in_host = (
+            self.client.get_host_fc_initiators(host_id))
+        iqns_in_host = (
+            self.client.get_host_iscsi_initiators(host_id))
+        if not (wwns_in_host or iqns_in_host or
+           self.client.is_host_associated_to_hostgroup(host_id)):
+            self.client.remove_host(host_id)
+
     def _classify_volume(self, volumes):
         normal_volumes = []
         replica_volumes = []
@@ -1577,6 +1587,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         return secondary_id, volumes_update
 
 
+@interface.volumedriver
 class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
     """ISCSI driver for Huawei storage arrays.
 
@@ -1768,6 +1779,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
             self.client.delete_mapping_view(view_id)
 
 
+@interface.volumedriver
 class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
     """FC driver for Huawei OceanStor storage arrays.
 
@@ -1834,8 +1846,14 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         if self.fcsan:
             # Use FC switch.
             zone_helper = fc_zone_helper.FCZoneHelper(self.fcsan, self.client)
-            (tgt_port_wwns, portg_id, init_targ_map) = (
-                zone_helper.build_ini_targ_map(wwns, host_id, lun_id))
+            try:
+                (tgt_port_wwns, portg_id, init_targ_map) = (
+                    zone_helper.build_ini_targ_map(wwns, host_id, lun_id))
+            except Exception as err:
+                self.remove_host_with_check(host_id)
+                msg = _('build_ini_targ_map fails. %s') % err
+                raise exception.VolumeBackendAPIException(data=msg)
+
             for ini in init_targ_map:
                 self.client.ensure_fc_initiator_added(ini, host_id)
         else:
@@ -1880,13 +1898,12 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
                             'initiator_target_map': init_targ_map,
                             'map_info': map_info}, }
 
-        loc_tgt_wwn = fc_info['data']['target_wwn']
-        local_ini_tgt_map = fc_info['data']['initiator_target_map']
-
         # Deal with hypermetro connection.
         metadata = huawei_utils.get_volume_metadata(volume)
         LOG.info(_LI("initialize_connection, metadata is: %s."), metadata)
         if 'hypermetro_id' in metadata:
+            loc_tgt_wwn = fc_info['data']['target_wwn']
+            local_ini_tgt_map = fc_info['data']['initiator_target_map']
             hyperm = hypermetro.HuaweiHyperMetro(self.client,
                                                  self.rmt_client,
                                                  self.configuration)

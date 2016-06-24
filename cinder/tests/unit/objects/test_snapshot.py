@@ -16,18 +16,14 @@ import copy
 import mock
 import six
 
-from oslo_log import log as logging
-
 from cinder.db.sqlalchemy import models
 from cinder import exception
 from cinder import objects
+from cinder.objects import fields
 from cinder.tests.unit import fake_constants as fake
 from cinder.tests.unit import fake_snapshot
 from cinder.tests.unit import fake_volume
 from cinder.tests.unit import objects as test_objects
-
-
-LOG = logging.getLogger(__name__)
 
 
 fake_db_snapshot = fake_snapshot.fake_db_snapshot(
@@ -40,7 +36,7 @@ del fake_db_snapshot['volume']
 fake_snapshot_obj = {
     'id': fake.SNAPSHOT_ID,
     'volume_id': fake.VOLUME_ID,
-    'status': "creating",
+    'status': fields.SnapshotStatus.CREATING,
     'progress': '0%',
     'volume_size': 1,
     'display_name': 'fake_name',

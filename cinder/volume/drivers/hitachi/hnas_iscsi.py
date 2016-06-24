@@ -30,6 +30,7 @@ from oslo_utils import units
 
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
+from cinder import interface
 from cinder import utils as cinder_utils
 from cinder.volume import driver
 from cinder.volume.drivers.hitachi import hnas_backend
@@ -164,6 +165,7 @@ def _read_config(xml_config_file):
     return config
 
 
+@interface.volumedriver
 class HDSISCSIDriver(driver.ISCSIDriver):
     """HDS HNAS volume driver.
 
@@ -318,7 +320,7 @@ class HDSISCSIDriver(driver.ISCSIDriver):
         # If we've got here and found_tgt is not True, we run out of targets,
         # raise and go away.
         if not found_tgt:
-            LOG.error(_LE("No more targets avaliable."))
+            LOG.error(_LE("No more targets available."))
             raise exception.NoMoreTargets(param=tgt_alias)
 
         LOG.info(_LI("Using target label: %s."), tgt_alias)

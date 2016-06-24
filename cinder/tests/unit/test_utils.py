@@ -352,15 +352,6 @@ class GenericUtilsTestCase(test.TestCase):
         self.assertEqual('sudo cinder-rootwrap /path/to/conf',
                          utils.get_root_helper())
 
-    def test_list_of_dicts_to_dict(self):
-        a = {'id': '1', 'color': 'orange'}
-        b = {'id': '2', 'color': 'blue'}
-        c = {'id': '3', 'color': 'green'}
-        lst = [a, b, c]
-
-        resp = utils.list_of_dicts_to_dict(lst, 'id')
-        self.assertEqual(c['id'], resp['3']['id'])
-
 
 class TemporaryChownTestCase(test.TestCase):
     @mock.patch('os.stat')
@@ -806,8 +797,7 @@ class BrickUtils(test.TestCase):
         self.assertEqual(mock_factory.return_value, output)
         mock_factory.assert_called_once_with(
             'protocol', mock_helper.return_value, driver=None,
-            execute=putils.execute, use_multipath=False,
-            device_scan_attempts=3)
+            use_multipath=False, device_scan_attempts=3)
 
 
 class StringLengthTestCase(test.TestCase):
@@ -823,6 +813,9 @@ class StringLengthTestCase(test.TestCase):
         self.assertRaises(exception.InvalidInput,
                           utils.check_string_length,
                           'a' * 256, 'name', max_length=255)
+        self.assertRaises(exception.InvalidInput,
+                          utils.check_string_length,
+                          dict(), 'name', max_length=255)
 
 
 class AddVisibleAdminMetadataTestCase(test.TestCase):

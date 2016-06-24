@@ -13,7 +13,6 @@
 #    under the License.
 
 from oslo_config import cfg
-from oslo_log import log as logging
 from oslo_utils import versionutils
 from oslo_versionedobjects import fields
 
@@ -23,8 +22,8 @@ from cinder.i18n import _
 from cinder import objects
 from cinder.objects import base
 
+
 CONF = cfg.CONF
-LOG = logging.getLogger(__name__)
 
 
 class MetadataObject(dict):
@@ -66,8 +65,8 @@ class Volume(base.CinderPersistentObject, base.CinderObject,
         'id': fields.UUIDField(),
         '_name_id': fields.UUIDField(nullable=True),
         'ec2_id': fields.UUIDField(nullable=True),
-        'user_id': fields.UUIDField(nullable=True),
-        'project_id': fields.UUIDField(nullable=True),
+        'user_id': fields.StringField(nullable=True),
+        'project_id': fields.StringField(nullable=True),
 
         'snapshot_id': fields.UUIDField(nullable=True),
 
@@ -85,7 +84,7 @@ class Volume(base.CinderPersistentObject, base.CinderObject,
         'display_name': fields.StringField(nullable=True),
         'display_description': fields.StringField(nullable=True),
 
-        'provider_id': fields.UUIDField(nullable=True),
+        'provider_id': fields.StringField(nullable=True),
         'provider_location': fields.StringField(nullable=True),
         'provider_auth': fields.StringField(nullable=True),
         'provider_geometry': fields.StringField(nullable=True),
@@ -283,7 +282,6 @@ class Volume(base.CinderPersistentObject, base.CinderObject,
         volume.obj_reset_changes()
         return volume
 
-    @base.remotable
     def create(self):
         if self.obj_attr_is_set('id'):
             raise exception.ObjectActionError(action='create',
@@ -300,7 +298,6 @@ class Volume(base.CinderPersistentObject, base.CinderObject,
         db_volume = db.volume_create(self._context, updates)
         self._from_db_object(self._context, self, db_volume)
 
-    @base.remotable
     def save(self):
         updates = self.cinder_obj_get_changes()
         if updates:
@@ -328,7 +325,6 @@ class Volume(base.CinderPersistentObject, base.CinderObject,
             db.volume_update(self._context, self.id, updates)
             self.obj_reset_changes()
 
-    @base.remotable
     def destroy(self):
         with self.obj_as_admin():
             db.volume_destroy(self._context, self.id)
@@ -442,11 +438,6 @@ class VolumeList(base.ObjectListBase, base.CinderObject):
         'objects': fields.ListOfObjectsField('Volume'),
     }
 
-    child_versions = {
-        '1.0': '1.0',
-        '1.1': '1.1',
-    }
-
     @classmethod
     def _get_expected_attrs(cls, context):
         expected_attrs = ['metadata', 'volume_type']
@@ -455,7 +446,7 @@ class VolumeList(base.ObjectListBase, base.CinderObject):
 
         return expected_attrs
 
-    @base.remotable_classmethod
+    @classmethod
     def get_all(cls, context, marker, limit, sort_keys=None, sort_dirs=None,
                 filters=None, offset=None):
         volumes = db.volume_get_all(context, marker, limit,
@@ -465,21 +456,21 @@ class VolumeList(base.ObjectListBase, base.CinderObject):
         return base.obj_make_list(context, cls(context), objects.Volume,
                                   volumes, expected_attrs=expected_attrs)
 
-    @base.remotable_classmethod
+    @classmethod
     def get_all_by_host(cls, context, host, filters=None):
         volumes = db.volume_get_all_by_host(context, host, filters)
         expected_attrs = cls._get_expected_attrs(context)
         return base.obj_make_list(context, cls(context), objects.Volume,
                                   volumes, expected_attrs=expected_attrs)
 
-    @base.remotable_classmethod
+    @classmethod
     def get_all_by_group(cls, context, group_id, filters=None):
         volumes = db.volume_get_all_by_group(context, group_id, filters)
         expected_attrs = cls._get_expected_attrs(context)
         return base.obj_make_list(context, cls(context), objects.Volume,
                                   volumes, expected_attrs=expected_attrs)
 
-    @base.remotable_classmethod
+    @classmethod
     def get_all_by_project(cls, context, project_id, marker, limit,
                            sort_keys=None, sort_dirs=None, filters=None,
                            offset=None):

@@ -3285,7 +3285,8 @@ class EMCVnxCliBase(object):
                                            cgsnapshot['id'])
             for snapshot in snapshots:
                 snapshots_model_update.append(
-                    {'id': snapshot['id'], 'status': 'available'})
+                    {'id': snapshot['id'],
+                     'status': fields.SnapshotStatus.AVAILABLE})
         except Exception:
             with excutils.save_and_reraise_exception():
                 LOG.error(_LE('Create cg snapshot %s failed.'),
@@ -3310,7 +3311,8 @@ class EMCVnxCliBase(object):
             self._client.delete_cgsnapshot(cgsnapshot['id'])
             for snapshot in snapshots:
                 snapshots_model_update.append(
-                    {'id': snapshot['id'], 'status': 'deleted'})
+                    {'id': snapshot['id'],
+                     'status': fields.SnapshotStatus.DELETED})
         except Exception:
             with excutils.save_and_reraise_exception():
                 LOG.error(_LE('Delete cgsnapshot %s failed.'),
@@ -3871,7 +3873,8 @@ class EMCVnxCliBase(object):
     def remove_export_snapshot(self, context, snapshot):
         """Removes mount point for a snapshot."""
         smp_name = self._construct_tmp_smp_name(snapshot)
-        volume = {'name': smp_name, 'provider_location': None}
+        volume = {'name': smp_name, 'provider_location': None,
+                  'volume_type_id': None}
         self.delete_volume(volume, True)
 
     def manage_existing_get_size(self, volume, existing_ref):

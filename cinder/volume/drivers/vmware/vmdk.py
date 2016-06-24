@@ -43,6 +43,7 @@ import six
 
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
+from cinder import interface
 from cinder.volume import driver
 from cinder.volume.drivers.vmware import datastore as hub
 from cinder.volume.drivers.vmware import exceptions as vmdk_exceptions
@@ -86,7 +87,7 @@ vmdk_opts = [
                help='Number of times VMware vCenter server API must be '
                     'retried upon connection related issues.'),
     cfg.FloatOpt('vmware_task_poll_interval',
-                 default=0.5,
+                 default=2.0,
                  help='The interval (in seconds) for polling remote tasks '
                       'invoked on VMware vCenter server.'),
     cfg.StrOpt('vmware_volume_folder',
@@ -207,6 +208,7 @@ class ImageDiskType(object):
                                               extra_spec_disk_type)
 
 
+@interface.volumedriver
 class VMwareVcVmdkDriver(driver.VolumeDriver):
     """Manage volumes on VMware vCenter server."""
 
@@ -247,8 +249,10 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
     @property
     def ds_sel(self):
         if not self._ds_sel:
+            max_objects = self.configuration.vmware_max_objects_retrieval
             self._ds_sel = hub.DatastoreSelector(self.volumeops,
-                                                 self.session)
+                                                 self.session,
+                                                 max_objects)
         return self._ds_sel
 
     def _validate_params(self):
@@ -940,9 +944,13 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                       {'path': vmdk_path.get_descriptor_ds_file_path(),
                        'backing': backing})
 
+            profile_id = self._get_storage_profile_id(volume)
             self.volumeops.attach_disk_to_backing(
-                backing, image_size_in_bytes / units.Ki, disk_type,
-                adapter_type, vmdk_path.get_descriptor_ds_file_path())
+                backing,
+                image_size_in_bytes / units.Ki, disk_type,
+                adapter_type,
+                profile_id,
+                vmdk_path.get_descriptor_ds_file_path())
             attached = True
 
             if disk_conversion:
@@ -1157,8 +1165,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
         """
 
         # if volume is attached raise exception
-        if (volume['volume_attachment'] and
-                len(volume['volume_attachment']) > 0):
+        if self._in_use(volume):
             msg = _("Upload to glance of attached volume is not supported.")
             LOG.error(msg)
             raise exception.InvalidVolume(msg)
@@ -1740,13 +1747,23 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                                       dest_dc_ref=dest_dc)
 
         # Attach the disk to be managed to volume backing.
+        profile_id = self._get_storage_profile_id(volume)
         self.volumeops.attach_disk_to_backing(
             backing,
             disk.capacityInKB,
             VMwareVcVmdkDriver._get_disk_type(volume),
             'lsiLogic',
+            profile_id,
             dest_path.get_descriptor_ds_file_path())
         self.volumeops.update_backing_disk_uuid(backing, volume['id'])
+
+    def unmanage(self, volume):
+        backing = self.volumeops.get_backing(volume['name'])
+        if backing:
+            extra_config = self._get_extra_config(volume)
+            for key in extra_config:
+                extra_config[key] = ''
+            self.volumeops.update_backing_extra_config(backing, extra_config)
 
     @property
     def session(self):
@@ -1800,6 +1817,12 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                     '%s is not allowed.') % self.MIN_SUPPORTED_VC_VERSION
             LOG.error(msg)
             raise exceptions.VMwareDriverException(message=msg)
+        elif vc_version == self.MIN_SUPPORTED_VC_VERSION:
+            # TODO(vbala): enforce vCenter version 5.5 in Ocata release.
+            LOG.warning(_LW('Running Cinder with a VMware vCenter version '
+                            '%s is deprecated. The minimum required version '
+                            'of vCenter server will be raised to 5.5 in the '
+                            '10.0.0 release.'), self.MIN_SUPPORTED_VC_VERSION)
 
     def do_setup(self, context):
         """Any initialization the volume driver does while starting."""
@@ -1825,7 +1848,8 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
         # TODO(vbala) remove properties: session, volumeops and ds_sel
         max_objects = self.configuration.vmware_max_objects_retrieval
         self._volumeops = volumeops.VMwareVolumeOps(self.session, max_objects)
-        self._ds_sel = hub.DatastoreSelector(self.volumeops, self.session)
+        self._ds_sel = hub.DatastoreSelector(
+            self.volumeops, self.session, max_objects)
 
         # Get clusters to be used for backing VM creation.
         cluster_names = self.configuration.vmware_cluster_name

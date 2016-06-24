@@ -700,7 +700,7 @@ class StorwizeHelpers(object):
                 wwpns.add(wwpn)
         return list(wwpns)
 
-    def get_host_from_connector(self, connector):
+    def get_host_from_connector(self, connector, volume_name=None):
         """Return the Storwize host described by the connector."""
         LOG.debug('Enter: get_host_from_connector: %s.', connector)
 
@@ -725,8 +725,24 @@ class StorwizeHelpers(object):
 
         # That didn't work, so try exhaustive search
         hosts_info = self.ssh.lshost()
+        # If we have a volume name we have a potential fast path
+        # for finding the matching host for that volume.
+        # Add the host_names that have mappings for our volume to the
+        # head of the list of host names to search them first
+        if volume_name:
+            hosts_map_info = self.ssh.lsvdiskhostmap(volume_name)
+            hosts_map_info_list = list(hosts_map_info.select('host_name'))
+            hosts_info_list = list(hosts_info.select('name'))
+            # remove the fast path host names from the end of the list
+            # so they are only searched for once.
+            for host in hosts_map_info_list:
+                idx = hosts_info_list.index(host)
+                del hosts_info_list[idx]
+            host_list = hosts_map_info_list + hosts_info_list
+        else:
+            host_list = list(hosts_info.select('name'))
         found = False
-        for name in hosts_info.select('name'):
+        for name in host_list:
             try:
                 resp = self.ssh.lshost(host=name)
             except processutils.ProcessExecutionError as ex:
@@ -1205,7 +1221,8 @@ class StorwizeHelpers(object):
 
     def run_consistgrp_snapshots(self, fc_consistgrp, snapshots, state,
                                  config, timeout):
-        cgsnapshot = {'status': 'available'}
+        model_update = {'status': fields.ConsistencyGroupStatus.AVAILABLE}
+        snapshots_model_update = []
         try:
             for snapshot in snapshots:
                 opts = self.get_vdisk_params(config, state,
@@ -1214,7 +1231,6 @@ class StorwizeHelpers(object):
                                                     snapshot['name'],
                                                     fc_consistgrp,
                                                     config, opts)
-                snapshot['status'] = 'available'
 
             self.prepare_fc_consistgrp(fc_consistgrp, timeout)
             self.start_fc_consistgrp(fc_consistgrp)
@@ -1223,31 +1239,40 @@ class StorwizeHelpers(object):
             # Cinder general will maintain the CG and snapshots relationship.
             self.delete_fc_consistgrp(fc_consistgrp)
         except exception.VolumeBackendAPIException as err:
-            for snapshot in snapshots:
-                snapshot['status'] = 'error'
-            cgsnapshot['status'] = 'error'
+            model_update['status'] = fields.ConsistencyGroupStatus.ERROR
             # Release cg
             self.delete_fc_consistgrp(fc_consistgrp)
             LOG.error(_LE("Failed to create CGSnapshot. "
                           "Exception: %s."), err)
 
-        return cgsnapshot, snapshots
+        for snapshot in snapshots:
+            snapshots_model_update.append(
+                {'id': snapshot['id'],
+                 'status': model_update['status']})
+
+        return model_update, snapshots_model_update
 
     def delete_consistgrp_snapshots(self, fc_consistgrp, snapshots):
         """Delete flashcopy maps and consistent group."""
-        cgsnapshot = {'status': 'available'}
+        model_update = {'status': fields.ConsistencyGroupStatus.DELETED}
+        snapshots_model_update = []
+
         try:
             for snapshot in snapshots:
                 self.ssh.rmvdisk(snapshot['name'], True)
-                snapshot['status'] = 'deleted'
         except exception.VolumeBackendAPIException as err:
-            for snapshot in snapshots:
-                snapshot['status'] = 'error_deleting'
-            cgsnapshot['status'] = 'error_deleting'
+            model_update['status'] = (
+                fields.ConsistencyGroupStatus.ERROR_DELETING)
             LOG.error(_LE("Failed to delete the snapshot %(snap)s of "
                           "CGSnapshot. Exception: %(exception)s."),
                       {'snap': snapshot['name'], 'exception': err})
-        return cgsnapshot, snapshots
+
+        for snapshot in snapshots:
+            snapshots_model_update.append(
+                {'id': snapshot['id'],
+                 'status': model_update['status']})
+
+        return model_update, snapshots_model_update
 
     def prepare_fc_consistgrp(self, fc_consistgrp, timeout):
         """Prepare FC Consistency Group."""
@@ -2996,22 +3021,24 @@ class StorwizeSVCCommonDriver(san.SanDriver,
         IBM Storwize will delete the volumes of the CG.
         """
         LOG.debug("Deleting consistency group.")
-        model_update = {}
-        model_update['status'] = fields.ConsistencyGroupStatus.DELETED
-        volumes = self.db.volume_get_all_by_group(context, group['id'])
+        model_update = {'status': fields.ConsistencyGroupStatus.DELETED}
+        volumes_model_update = []
 
         for volume in volumes:
             try:
                 self._helpers.delete_vdisk(volume['name'], True)
-                volume['status'] = 'deleted'
+                volumes_model_update.append(
+                    {'id': volume['id'], 'status': 'deleted'})
             except exception.VolumeBackendAPIException as err:
-                volume['status'] = 'error_deleting'
-                if model_update['status'] != 'error_deleting':
-                    model_update['status'] = 'error_deleting'
+                model_update['status'] = (
+                    fields.ConsistencyGroupStatus.ERROR_DELETING)
                 LOG.error(_LE("Failed to delete the volume %(vol)s of CG. "
                               "Exception: %(exception)s."),
                           {'vol': volume['name'], 'exception': err})
-        return model_update, volumes
+                volumes_model_update.append(
+                    {'id': volume['id'], 'status': 'error_deleting'})
+
+        return model_update, volumes_model_update
 
     def update_consistencygroup(self, ctxt, group, add_volumes,
                                 remove_volumes):
@@ -3066,12 +3093,10 @@ class StorwizeSVCCommonDriver(san.SanDriver,
     def create_cgsnapshot(self, ctxt, cgsnapshot, snapshots):
         """Creates a cgsnapshot."""
         # Use cgsnapshot id as cg name
-        cg_name = 'cg_snap-' + cgsnapshot['id']
+        cg_name = 'cg_snap-' + cgsnapshot.id
         # Create new cg as cg_snapshot
         self._helpers.create_fc_consistgrp(cg_name)
 
-        snapshots = self.db.snapshot_get_all_for_cgsnapshot(
-            ctxt, cgsnapshot['id'])
         timeout = self.configuration.storwize_svc_flashcopy_timeout
 
         model_update, snapshots_model = (
@@ -3087,9 +3112,6 @@ class StorwizeSVCCommonDriver(san.SanDriver,
         """Deletes a cgsnapshot."""
         cgsnapshot_id = cgsnapshot['id']
         cg_name = 'cg_snap-' + cgsnapshot_id
-
-        snapshots = self.db.snapshot_get_all_for_cgsnapshot(context,
-                                                            cgsnapshot_id)
 
         model_update, snapshots_model = (
             self._helpers.delete_consistgrp_snapshots(cg_name,

@@ -68,7 +68,8 @@ global_opts = [
     cfg.BoolOpt('glance_api_insecure',
                 default=False,
                 help='Allow to perform insecure SSL (https) requests to '
-                     'glance'),
+                     'glance (https will be used but cert validation will '
+                     'not be performed).'),
     cfg.BoolOpt('glance_api_ssl_compression',
                 default=False,
                 help='Enables or disables negotiation of SSL layer '
@@ -94,9 +95,11 @@ global_opts = [
                help='The topic that volume backup nodes listen on'),
     cfg.BoolOpt('enable_v1_api',
                 default=True,
+                deprecated_for_removal=True,
                 help=_("DEPRECATED: Deploy v1 of the Cinder API.")),
     cfg.BoolOpt('enable_v2_api',
                 default=True,
+                deprecated_for_removal=True,
                 help=_("DEPRECATED: Deploy v2 of the Cinder API.")),
     cfg.BoolOpt('enable_v3_api',
                 default=True,

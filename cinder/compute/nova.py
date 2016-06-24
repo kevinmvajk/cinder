@@ -16,7 +16,9 @@
 Handles all requests to Nova.
 """
 
-
+import keystoneauth1.loading
+import keystoneauth1.session
+from novaclient import api_versions
 from novaclient import client as nova_client
 from novaclient import exceptions as nova_exceptions
 from novaclient import service_catalog
@@ -59,9 +61,10 @@ CONF.register_opts(nova_opts)
 LOG = logging.getLogger(__name__)
 
 # TODO(e0ne): Make Nova version configurable in Mitaka.
-NOVA_API_VERSION = 2
+NOVA_API_VERSION = "2.1"
 
-nova_extensions = [ext for ext in nova_client.discover_extensions(2)
+nova_extensions = [ext for ext in
+                   nova_client.discover_extensions(NOVA_API_VERSION)
                    if ext.name in ("assisted_volume_snapshots",
                                    "list_extensions")]
 
@@ -134,11 +137,17 @@ def novaclient(context, admin_endpoint=False, privileged_user=False,
 
         LOG.debug('Nova client connection created using URL: %s', url)
 
-    c = nova_client.Client(NOVA_API_VERSION,
-                           context.user_id,
-                           context.auth_token,
-                           context.project_name,
-                           auth_url=url,
+    # Now that we have the correct auth_url, username, password and
+    # project_name, let's build a Keystone session.
+    loader = keystoneauth1.loading.get_plugin_loader('password')
+    auth = loader.load_from_options(auth_url=url,
+                                    username=context.user_id,
+                                    password=context.auth_token,
+                                    project_name=context.project_name)
+    keystone_session = keystoneauth1.session.Session(auth=auth)
+
+    c = nova_client.Client(api_versions.APIVersion(NOVA_API_VERSION),
+                           session=keystone_session,
                            insecure=CONF.nova_api_insecure,
                            timeout=timeout,
                            region_name=CONF.os_region_name,

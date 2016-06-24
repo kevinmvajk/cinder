@@ -95,7 +95,8 @@ def main():
                 host = "%s@%s" % (backend_host or CONF.host, backend)
                 server = service.Service.create(host=host,
                                                 service_name=backend,
-                                                binary='cinder-volume')
+                                                binary='cinder-volume',
+                                                coordination=True)
                 # Dispose of the whole DB connection pool here before
                 # starting another process.  Otherwise we run into cases
                 # where child processes share DB connections which results
@@ -103,9 +104,10 @@ def main():
                 session.dispose_engine()
                 launcher.launch_service(server)
         else:
-            server = service.Service.create(binary='cinder-volume')
+            server = service.Service.create(binary='cinder-volume',
+                                            coordination=True)
             launcher.launch_service(server)
     except (Exception, SystemExit):
-        LOG.exception(_LE('Failed to load conder-volume'))
+        LOG.exception(_LE('Failed to load cinder-volume'))
 
     launcher.wait()

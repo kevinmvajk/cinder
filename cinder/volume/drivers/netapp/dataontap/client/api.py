@@ -32,12 +32,13 @@ import six
 from six.moves import urllib
 
 from cinder import exception
-from cinder.i18n import _
+from cinder.i18n import _, _LE
 from cinder import ssh_utils
 from cinder import utils
 
 LOG = logging.getLogger(__name__)
 
+EAPIPRIVILEGE = '13003'
 EAPINOTFOUND = '13005'
 ESIS_CLONE_NOT_LICENSED = '14956'
 ESNAPSHOTNOTALLOWED = '13023'
@@ -223,6 +224,7 @@ class NaServer(object):
         except urllib.error.HTTPError as e:
             raise NaApiError(e.code, e.msg)
         except Exception:
+            LOG.exception(_LE("Error communicating with NetApp filer."))
             raise NaApiError('Unexpected error')
 
         response_xml = response.read()
@@ -559,11 +561,6 @@ class NaApiError(Exception):
 
     def __str__(self, *args, **kwargs):
         return 'NetApp API failed. Reason - %s:%s' % (self.code, self.message)
-
-
-NaErrors = {'API_NOT_FOUND': NaApiError('13005', 'Unable to find API'),
-            'INSUFFICIENT_PRIVS': NaApiError('13003',
-                                             'Insufficient privileges')}
 
 
 def invoke_api(na_server, api_name, api_family='cm', query=None,

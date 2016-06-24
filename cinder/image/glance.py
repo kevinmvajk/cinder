@@ -254,10 +254,15 @@ class GlanceImageService(object):
             if param in params:
                 _params[param] = params.get(param)
 
-        # ensure filters is a dict
-        _params.setdefault('filters', {})
-        # NOTE(vish): don't filter out private images
-        _params['filters'].setdefault('is_public', 'none')
+        # NOTE(geguileo): We set is_public default value for v1 because we want
+        # to retrieve all images by default.  We don't need to send v2
+        # equivalent - "visible" - because its default value when omited is
+        # "public, private, shared", which will return all.
+        if CONF.glance_api_version <= 1:
+            # ensure filters is a dict
+            _params.setdefault('filters', {})
+            # NOTE(vish): don't filter out private images
+            _params['filters'].setdefault('is_public', 'none')
 
         return _params
 
@@ -311,16 +316,6 @@ class GlanceImageService(object):
         try:
             return client.call(context, 'add_location',
                                image_id, url, metadata)
-        except Exception:
-            _reraise_translated_image_exception(image_id)
-
-    def delete_locations(self, context, image_id, url_set):
-        """Delete backend location urls from an image."""
-        if CONF.glance_api_version != 2:
-            raise exception.Invalid("Image API version 2 is disabled.")
-        client = GlanceClientWrapper(version=2)
-        try:
-            return client.call(context, 'delete_locations', image_id, url_set)
         except Exception:
             _reraise_translated_image_exception(image_id)
 

@@ -33,8 +33,8 @@ class ConsistencyGroup(base.CinderPersistentObject, base.CinderObject,
 
     fields = {
         'id': fields.UUIDField(),
-        'user_id': fields.UUIDField(),
-        'project_id': fields.UUIDField(),
+        'user_id': fields.StringField(),
+        'project_id': fields.StringField(),
         'host': fields.StringField(nullable=True),
         'availability_zone': fields.StringField(nullable=True),
         'name': fields.StringField(nullable=True),
@@ -60,7 +60,7 @@ class ConsistencyGroup(base.CinderPersistentObject, base.CinderObject,
 
         if 'cgsnapshots' in expected_attrs:
             cgsnapshots = base.obj_make_list(
-                context, objects.CGSnapshotsList(context),
+                context, objects.CGSnapshotList(context),
                 objects.CGSnapshot,
                 db_consistencygroup['cgsnapshots'])
             consistencygroup.cgsnapshots = cgsnapshots
@@ -70,14 +70,19 @@ class ConsistencyGroup(base.CinderPersistentObject, base.CinderObject,
                 context, objects.VolumeList(context),
                 objects.Volume,
                 db_consistencygroup['volumes'])
-            consistencygroup.cgsnapshots = volumes
+            consistencygroup.volumes = volumes
 
         consistencygroup._context = context
         consistencygroup.obj_reset_changes()
         return consistencygroup
 
-    @base.remotable
-    def create(self):
+    def create(self, cg_snap_id=None, cg_id=None):
+        """Create a consistency group.
+
+        If cg_snap_id or cg_id are specified then volume_type_id,
+        availability_zone, and host will be taken from the source Consistency
+        Group.
+        """
         if self.obj_attr_is_set('id'):
             raise exception.ObjectActionError(action='create',
                                               reason=_('already_created'))
@@ -92,7 +97,9 @@ class ConsistencyGroup(base.CinderPersistentObject, base.CinderObject,
                                               reason=_('volumes assigned'))
 
         db_consistencygroups = db.consistencygroup_create(self._context,
-                                                          updates)
+                                                          updates,
+                                                          cg_snap_id,
+                                                          cg_id)
         self._from_db_object(self._context, self, db_consistencygroups)
 
     def obj_load_attr(self, attrname):
@@ -114,7 +121,6 @@ class ConsistencyGroup(base.CinderPersistentObject, base.CinderObject,
 
         self.obj_reset_changes(fields=[attrname])
 
-    @base.remotable
     def save(self):
         updates = self.cinder_obj_get_changes()
         if updates:
@@ -128,7 +134,6 @@ class ConsistencyGroup(base.CinderPersistentObject, base.CinderObject,
             db.consistencygroup_update(self._context, self.id, updates)
             self.obj_reset_changes()
 
-    @base.remotable
     def destroy(self):
         with self.obj_as_admin():
             db.consistencygroup_destroy(self._context, self.id)
@@ -143,12 +148,8 @@ class ConsistencyGroupList(base.ObjectListBase, base.CinderObject):
     fields = {
         'objects': fields.ListOfObjectsField('ConsistencyGroup')
     }
-    child_version = {
-        '1.0': '1.0',
-        '1.1': '1.1',
-    }
 
-    @base.remotable_classmethod
+    @classmethod
     def get_all(cls, context, filters=None, marker=None, limit=None,
                 offset=None, sort_keys=None, sort_dirs=None):
         consistencygroups = db.consistencygroup_get_all(
@@ -158,7 +159,7 @@ class ConsistencyGroupList(base.ObjectListBase, base.CinderObject):
                                   objects.ConsistencyGroup,
                                   consistencygroups)
 
-    @base.remotable_classmethod
+    @classmethod
     def get_all_by_project(cls, context, project_id, filters=None, marker=None,
                            limit=None, offset=None, sort_keys=None,
                            sort_dirs=None):

@@ -25,9 +25,11 @@ from oslo_concurrency import processutils
 from oslo_config import cfg
 
 from cinder import context
+from cinder.db.sqlalchemy import models
 from cinder import exception
+from cinder.objects import fields
 from cinder import test
-from cinder.tests.unit import fake_backup
+from cinder.tests.unit.backup import fake_backup
 from cinder.tests.unit import fake_constants as fake
 from cinder.tests.unit import fake_snapshot
 from cinder.tests.unit import fake_volume
@@ -134,7 +136,7 @@ class NotifyUsageTestCase(test.TestCase):
             'id': fake.SNAPSHOT_ID,
             'display_name': '11',
             'created_at': '2014-12-11T10:10:00',
-            'status': 'pause',
+            'status': fields.SnapshotStatus.ERROR,
             'deleted': '',
             'snapshot_metadata': [{'key': 'fake_snap_meta_key',
                                    'value': 'fake_snap_meta_value'}],
@@ -152,7 +154,7 @@ class NotifyUsageTestCase(test.TestCase):
             'snapshot_id': fake.SNAPSHOT_ID,
             'display_name': '11',
             'created_at': 'DONTCARE',
-            'status': 'pause',
+            'status': fields.SnapshotStatus.ERROR,
             'deleted': '',
             'metadata': six.text_type({'fake_snap_meta_key':
                                       u'fake_snap_meta_value'}),
@@ -160,7 +162,7 @@ class NotifyUsageTestCase(test.TestCase):
         self.assertDictMatch(expected_snapshot, usage_info)
 
     @mock.patch('cinder.db.volume_glance_metadata_get')
-    @mock.patch('cinder.db.volume_attachment_get_used_by_volume_id')
+    @mock.patch('cinder.db.volume_attachment_get_all_by_volume_id')
     def test_usage_from_volume(self, mock_attachment, mock_image_metadata):
         mock_image_metadata.return_value = {'image_id': 'fake_image_id'}
         mock_attachment.return_value = [{'instance_uuid': 'fake_instance_id'}]
@@ -756,56 +758,51 @@ class VolumeUtilsTestCase(test.TestCase):
         host_2 = 'fake_host2@backend1'
         self.assertFalse(volume_utils.hosts_are_equivalent(host_1, host_2))
 
-    def test_check_managed_volume_already_managed(self):
-        mock_db = mock.Mock()
-
-        result = volume_utils.check_already_managed_volume(
-            mock_db, 'volume-d8cd1feb-2dcc-404d-9b15-b86fe3bec0a1')
+    @mock.patch('cinder.db.sqlalchemy.api.resource_exists', return_value=True)
+    def test_check_managed_volume_already_managed(self, exists_mock):
+        id_ = 'd8cd1feb-2dcc-404d-9b15-b86fe3bec0a1'
+        vol_id = 'volume-' + id_
+        result = volume_utils.check_already_managed_volume(vol_id)
         self.assertTrue(result)
+        exists_mock.assert_called_once_with(mock.ANY, models.Volume, id_)
 
-    @mock.patch('cinder.volume.utils.CONF')
-    def test_check_already_managed_with_vol_id_vol_pattern(self, conf_mock):
-        mock_db = mock.Mock()
-        conf_mock.volume_name_template = 'volume-%s-volume'
+    @mock.patch('cinder.db.sqlalchemy.api.resource_exists', return_value=True)
+    def test_check_already_managed_with_vol_id_vol_pattern(self, exists_mock):
+        template = 'volume-%s-volume'
+        self.override_config('volume_name_template', template)
+        id_ = 'd8cd1feb-2dcc-404d-9b15-b86fe3bec0a1'
+        vol_id = template % id_
 
-        result = volume_utils.check_already_managed_volume(
-            mock_db, 'volume-d8cd1feb-2dcc-404d-9b15-b86fe3bec0a1-volume')
+        result = volume_utils.check_already_managed_volume(vol_id)
         self.assertTrue(result)
+        exists_mock.assert_called_once_with(mock.ANY, models.Volume, id_)
 
-    @mock.patch('cinder.volume.utils.CONF')
-    def test_check_already_managed_with_id_vol_pattern(self, conf_mock):
-        mock_db = mock.Mock()
-        conf_mock.volume_name_template = '%s-volume'
+    @mock.patch('cinder.db.sqlalchemy.api.resource_exists', return_value=True)
+    def test_check_already_managed_with_id_vol_pattern(self, exists_mock):
+        template = '%s-volume'
+        self.override_config('volume_name_template', template)
+        id_ = 'd8cd1feb-2dcc-404d-9b15-b86fe3bec0a1'
+        vol_id = template % id_
 
-        result = volume_utils.check_already_managed_volume(
-            mock_db, 'd8cd1feb-2dcc-404d-9b15-b86fe3bec0a1-volume')
+        result = volume_utils.check_already_managed_volume(vol_id)
         self.assertTrue(result)
+        exists_mock.assert_called_once_with(mock.ANY, models.Volume, id_)
 
-    def test_check_managed_volume_not_managed_cinder_like_name(self):
-        mock_db = mock.Mock()
-        mock_db.volume_get = mock.Mock(
-            side_effect=exception.VolumeNotFound(
-                'volume-d8cd1feb-2dcc-404d-9b15-b86fe3bec0a1'))
-
-        result = volume_utils.check_already_managed_volume(
-            mock_db, 'volume-d8cd1feb-2dcc-404d-9b15-b86fe3bec0a1')
-
+    @mock.patch('cinder.db.sqlalchemy.api.resource_exists', return_value=False)
+    def test_check_managed_volume_not_managed_cinder_like_name(self,
+                                                               exists_mock):
+        id_ = 'd8cd1feb-2dcc-404d-9b15-b86fe3bec0a1'
+        vol_id = 'volume-' + id_
+        result = volume_utils.check_already_managed_volume(vol_id)
         self.assertFalse(result)
+        exists_mock.assert_called_once_with(mock.ANY, models.Volume, id_)
 
     def test_check_managed_volume_not_managed(self):
-        mock_db = mock.Mock()
-
-        result = volume_utils.check_already_managed_volume(
-            mock_db, 'test-volume')
-
+        result = volume_utils.check_already_managed_volume('test-volume')
         self.assertFalse(result)
 
     def test_check_managed_volume_not_managed_id_like_uuid(self):
-        mock_db = mock.Mock()
-
-        result = volume_utils.check_already_managed_volume(
-            mock_db, 'volume-d8cd1fe')
-
+        result = volume_utils.check_already_managed_volume('volume-d8cd1fe')
         self.assertFalse(result)
 
     def test_convert_config_string_to_dict(self):
@@ -815,20 +812,3 @@ class VolumeUtilsTestCase(test.TestCase):
         self.assertEqual(
             expected_dict,
             volume_utils.convert_config_string_to_dict(test_string))
-
-    def test_process_reserve_over_quota(self):
-        ctxt = context.get_admin_context()
-        ctxt.project_id = 'fake'
-        overs_one = ['gigabytes']
-        over_two = ['snapshots']
-        usages = {'gigabytes': {'reserved': 1, 'in_use': 9},
-                  'snapshots': {'reserved': 1, 'in_use': 9}}
-        quotas = {'gigabytes': 10, 'snapshots': 10}
-        size = 1
-
-        self.assertRaises(exception.VolumeSizeExceedsAvailableQuota,
-                          volume_utils.process_reserve_over_quota,
-                          ctxt, overs_one, usages, quotas, size)
-        self.assertRaises(exception.SnapshotLimitExceeded,
-                          volume_utils.process_reserve_over_quota,
-                          ctxt, over_two, usages, quotas, size)

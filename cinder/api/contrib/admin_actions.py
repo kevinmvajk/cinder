@@ -24,6 +24,7 @@ from cinder import db
 from cinder import exception
 from cinder.i18n import _
 from cinder import objects
+from cinder.objects import fields
 from cinder import rpc
 from cinder import utils
 from cinder import volume
@@ -83,7 +84,7 @@ class AdminController(wsgi.Controller):
 
         def _clean_volume_attachment(context, id):
             attachments = (
-                db.volume_attachment_get_used_by_volume_id(context, id))
+                db.volume_attachment_get_all_by_volume_id(context, id))
             for attachment in attachments:
                 db.volume_detached(context, id, attachment.id)
             db.volume_admin_metadata_delete(context, id,
@@ -275,6 +276,7 @@ class SnapshotAdminController(AdminController):
     """AdminController for Snapshots."""
 
     collection = 'snapshots'
+    valid_status = fields.SnapshotStatus.ALL
 
     def _update(self, *args, **kwargs):
         context = args[0]

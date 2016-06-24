@@ -23,8 +23,10 @@ from cinder import exception
 from cinder import flow_utils
 from cinder.i18n import _, _LE, _LW
 from cinder import objects
+from cinder.objects import fields
 from cinder import policy
 from cinder import quota
+from cinder import quota_utils
 from cinder import utils
 from cinder.volume.flows import common
 from cinder.volume import utils as vol_utils
@@ -40,7 +42,7 @@ QUOTAS = quota.QUOTAS
 # Only in these 'sources' status can we attempt to create a volume from a
 # source volume or a source snapshot, other status states we can not create
 # from, 'error' being the common example.
-SNAPSHOT_PROCEED_STATUS = ('available',)
+SNAPSHOT_PROCEED_STATUS = (fields.SnapshotStatus.AVAILABLE,)
 SRC_VOL_PROCEED_STATUS = ('available', 'in-use',)
 REPLICA_PROCEED_STATUS = ('active', 'active-stopped',)
 CG_PROCEED_STATUS = ('available', 'creating',)
@@ -600,53 +602,9 @@ class QuotaReserveTask(flow_utils.CinderTask):
                 'reservations': reservations,
             }
         except exception.OverQuota as e:
-            overs = e.kwargs['overs']
-            quotas = e.kwargs['quotas']
-            usages = e.kwargs['usages']
-
-            def _consumed(name):
-                usage = usages[name]
-                return usage['reserved'] + usage['in_use'] + usage.get(
-                    'allocated', 0)
-
-            def _get_over(name):
-                for over in overs:
-                    if name in over:
-                        return over
-                return None
-
-            over_name = _get_over('gigabytes')
-            exceeded_vol_limit_name = _get_over('volumes')
-            if over_name:
-                # TODO(mc_nair): improve error message for child -1 limit
-                msg = _LW("Quota exceeded for %(s_pid)s, tried to create "
-                          "%(s_size)sG volume (%(d_consumed)dG "
-                          "of %(d_quota)dG already consumed)")
-                LOG.warning(msg, {'s_pid': context.project_id,
-                                  's_size': size,
-                                  'd_consumed': _consumed(over_name),
-                                  'd_quota': quotas[over_name]})
-                raise exception.VolumeSizeExceedsAvailableQuota(
-                    name=over_name,
-                    requested=size,
-                    consumed=_consumed(over_name),
-                    quota=quotas[over_name])
-            elif exceeded_vol_limit_name:
-                msg = _LW("Quota %(s_name)s exceeded for %(s_pid)s, tried "
-                          "to create volume (%(d_consumed)d volume(s) "
-                          "already consumed).")
-                LOG.warning(msg,
-                            {'s_name': exceeded_vol_limit_name,
-                             's_pid': context.project_id,
-                             'd_consumed':
-                             _consumed(exceeded_vol_limit_name)})
-                # TODO(mc_nair): improve error message for child -1 limit
-                raise exception.VolumeLimitExceeded(
-                    allowed=quotas[exceeded_vol_limit_name],
-                    name=exceeded_vol_limit_name)
-            else:
-                # If nothing was reraised, ensure we reraise the initial error
-                raise
+            quota_utils.process_reserve_over_quota(context, e,
+                                                   resource='volumes',
+                                                   size=size)
 
     def revert(self, context, result, optional_args, **kwargs):
         # We never produced a result and therefore can't destroy anything.

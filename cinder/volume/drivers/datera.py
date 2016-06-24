@@ -13,22 +13,23 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
 import json
 import time
 import uuid
-import functools
 
+import ipaddress
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import units
 import requests
 import six
-import ipaddress
 
 from cinder import context
 from cinder import exception
 from cinder.i18n import _, _LE, _LI
+from cinder import interface
 from cinder import utils
 from cinder.volume.drivers.san import san
 from cinder.volume import qos_specs
@@ -105,6 +106,7 @@ def _authenticated(func):
     return func_wrapper
 
 
+@interface.volumedriver
 @six.add_metaclass(utils.TraceWrapperWithABCMetaclass)
 class DateraDriver(san.SanISCSIDriver):
 
@@ -279,7 +281,7 @@ class DateraDriver(san.SanISCSIDriver):
         }
         app_inst = self._issue_api_request(url, method='put', body=data)
         storage_instances = app_inst["storage_instances"]
-        si_names = storage_instances.keys()
+        si_names = list(storage_instances.keys())
 
         portal = storage_instances[si_names[0]]['access']['ips'][0] + ':3260'
         iqn = storage_instances[si_names[0]]['access']['iqn']
@@ -301,7 +303,7 @@ class DateraDriver(san.SanISCSIDriver):
                     'target_portals': portals,
                     'target_lun': self._get_lunid(),
                     'target_luns': lunids,
-                    'volume_id': 1,
+                    'volume_id': volume['id'],
                     'discard': False}}
         else:
             return {
@@ -311,7 +313,7 @@ class DateraDriver(san.SanISCSIDriver):
                     'target_iqn': iqn,
                     'target_portal': portal,
                     'target_lun': self._get_lunid(),
-                    'volume_id': 1,
+                    'volume_id': volume['id'],
                     'discard': False}}
 
     def create_export(self, context, volume, connector):
@@ -786,7 +788,7 @@ class DateraDriver(san.SanISCSIDriver):
             fpolicies = {k: int(v) for k, v in
                          policies.items() if k.endswith("max")}
             # Filter all 0 values from being passed
-            fpolicies = dict(filter(lambda (_, v): v > 0, fpolicies.items()))
+            fpolicies = dict(filter(lambda _v: _v[1] > 0, fpolicies.items()))
             if fpolicies:
                 self._issue_api_request(url, 'post', body=fpolicies)
 

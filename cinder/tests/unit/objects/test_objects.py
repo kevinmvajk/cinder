@@ -15,6 +15,7 @@
 from oslo_versionedobjects import fixture
 
 from cinder import db
+from cinder import objects
 from cinder.objects import base
 from cinder import test
 
@@ -22,23 +23,23 @@ from cinder import test
 # NOTE: The hashes in this list should only be changed if they come with a
 # corresponding version bump in the affected objects.
 object_data = {
-    'Backup': '1.4-cae44fe34d5a870110ba93adebc1edca',
-    'BackupImport': '1.4-cae44fe34d5a870110ba93adebc1edca',
-    'BackupList': '1.0-24591dabe26d920ce0756fe64cd5f3aa',
-    'CGSnapshot': '1.0-78b91e76cb4c56e9cf5c9c41e208c05a',
-    'CGSnapshotList': '1.0-e8c3f4078cd0ee23487b34d173eec776',
-    'ConsistencyGroup': '1.2-bcc1ee6b28840bb089d122ca4fa0cd2c',
-    'ConsistencyGroupList': '1.1-73916823b697dfa0c7f02508d87e0f28',
-    'Service': '1.3-66c8e1683f58546c54551e9ff0a3b111',
-    'ServiceList': '1.1-cb758b200f0a3a90efabfc5aa2ffb627',
-    'Snapshot': '1.0-404c1a8b48a808aa0b7cc92cd3ec1e57',
-    'SnapshotList': '1.0-71661e7180ef6cc51501704a9bea4bf1',
-    'Volume': '1.3-264388ec57bc4c3353c89f93bebf9482',
-    'VolumeAttachment': '1.0-8fc9a9ac6f554fdf2a194d25dbf28a3b',
-    'VolumeAttachmentList': '1.0-307d2b6c8dd55ef854f6386898e9e98e',
-    'VolumeList': '1.1-03ba6cb8c546683e64e15c50042cb1a3',
-    'VolumeType': '1.0-dd980cfd1eef2dcce941a981eb469fc8',
-    'VolumeTypeList': '1.1-8a1016c03570dc13b9a33fe04a6acb2c',
+    'Backup': '1.4-c50f7a68bb4c400dd53dd219685b3992',
+    'BackupImport': '1.4-c50f7a68bb4c400dd53dd219685b3992',
+    'BackupList': '1.0-15ecf022a68ddbb8c2a6739cfc9f8f5e',
+    'CGSnapshot': '1.0-3212ac2b4c2811b7134fb9ba2c49ff74',
+    'CGSnapshotList': '1.0-15ecf022a68ddbb8c2a6739cfc9f8f5e',
+    'ConsistencyGroup': '1.2-ff7638e03ae7a3bb7a43a6c5c4d0c94a',
+    'ConsistencyGroupList': '1.1-15ecf022a68ddbb8c2a6739cfc9f8f5e',
+    'Service': '1.3-d7c1e133791c9d766596a0528fc9a12f',
+    'ServiceList': '1.1-15ecf022a68ddbb8c2a6739cfc9f8f5e',
+    'Snapshot': '1.1-37966f7141646eb29e9ad5298ff2ca8a',
+    'SnapshotList': '1.0-15ecf022a68ddbb8c2a6739cfc9f8f5e',
+    'Volume': '1.3-15ff1f42d4e8eb321aa8217dd46aa1e1',
+    'VolumeList': '1.1-15ecf022a68ddbb8c2a6739cfc9f8f5e',
+    'VolumeAttachment': '1.0-b30dacf62b2030dd83d8a1603f1064ff',
+    'VolumeAttachmentList': '1.0-15ecf022a68ddbb8c2a6739cfc9f8f5e',
+    'VolumeType': '1.1-6673dd9ce7c27e9c85279afb20833877',
+    'VolumeTypeList': '1.1-15ecf022a68ddbb8c2a6739cfc9f8f5e',
 }
 
 
@@ -88,3 +89,15 @@ class TestObjectVersions(test.TestCase):
             if not issubclass(cls[0], base.ObjectListBase):
                 db_model = db.get_model_for_versioned_object(cls[0])
                 _check_table_matched(db_model, cls[0])
+
+    def test_obj_make_compatible(self):
+        # Go through all of the object classes and run obj_to_primitive() with
+        # a target version of all previous minor versions. It doesn't test
+        # the converted data, but at least ensures the method doesn't blow
+        # up on something simple.
+        init_args = {}
+        init_kwargs = {objects.Snapshot: {'context': 'ctxt'}}
+        checker = fixture.ObjectVersionChecker(
+            base.CinderObjectRegistry.obj_classes())
+        checker.test_compatibility_routines(init_args=init_args,
+                                            init_kwargs=init_kwargs)

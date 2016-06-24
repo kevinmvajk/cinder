@@ -19,8 +19,6 @@
 WSGI middleware for OpenStack Volume API.
 """
 
-from oslo_log import log as logging
-
 from cinder.api import extensions
 import cinder.api.openstack
 from cinder.api.v2 import limits
@@ -28,12 +26,10 @@ from cinder.api.v2 import snapshot_metadata
 from cinder.api.v2 import snapshots
 from cinder.api.v2 import types
 from cinder.api.v2 import volume_metadata
+from cinder.api.v3 import consistencygroups
 from cinder.api.v3 import messages
 from cinder.api.v3 import volumes
 from cinder.api import versions
-
-
-LOG = logging.getLogger(__name__)
 
 
 class APIRouter(cinder.api.openstack.APIRouter):
@@ -103,3 +99,9 @@ class APIRouter(cinder.api.openstack.APIRouter):
                        controller=volume_metadata_controller,
                        action='update_all',
                        conditions={"method": ['PUT']})
+
+        self.resources['consistencygroups'] = (
+            consistencygroups.create_resource())
+        mapper.resource("consistencygroup", "consistencygroups",
+                        controller=self.resources['consistencygroups'],
+                        member={'update': 'PUT'})

@@ -22,6 +22,7 @@
 import collections
 import datetime as dt
 import functools
+import itertools
 import re
 import sys
 import threading
@@ -41,10 +42,12 @@ import six
 import sqlalchemy
 from sqlalchemy import MetaData
 from sqlalchemy import or_, and_, case
+from sqlalchemy.orm import aliased
 from sqlalchemy.orm import joinedload, joinedload_all
 from sqlalchemy.orm import RelationshipProperty
 from sqlalchemy.schema import Table
 from sqlalchemy import sql
+from sqlalchemy.sql.expression import bindparam
 from sqlalchemy.sql.expression import desc
 from sqlalchemy.sql.expression import literal_column
 from sqlalchemy.sql.expression import true
@@ -201,10 +204,11 @@ def require_volume_exists(f):
     their first two arguments.
     """
 
+    @functools.wraps(f)
     def wrapper(context, volume_id, *args, **kwargs):
-        volume_get(context, volume_id)
+        if not resource_exists(context, models.Volume, volume_id):
+            raise exception.VolumeNotFound(volume_id=volume_id)
         return f(context, volume_id, *args, **kwargs)
-    wrapper.__name__ = f.__name__
     return wrapper
 
 
@@ -215,10 +219,11 @@ def require_snapshot_exists(f):
     their first two arguments.
     """
 
+    @functools.wraps(f)
     def wrapper(context, snapshot_id, *args, **kwargs):
-        snapshot_get(context, snapshot_id)
+        if not resource_exists(context, models.Snapshot, snapshot_id):
+            raise exception.SnapshotNotFound(snapshot_id=snapshot_id)
         return f(context, snapshot_id, *args, **kwargs)
-    wrapper.__name__ = f.__name__
     return wrapper
 
 
@@ -1353,7 +1358,7 @@ def volume_detached(context, volume_id, attachment_id):
             attachment['deleted_at'] = now
             attachment.save(session=session)
 
-        attachment_list = volume_attachment_get_used_by_volume_id(
+        attachment_list = volume_attachment_get_all_by_volume_id(
             context, volume_id, session=session)
         remain_attachment = False
         if attachment_list and len(attachment_list) > 0:
@@ -1440,7 +1445,7 @@ def volume_attachment_get(context, attachment_id, session=None):
 
 
 @require_context
-def volume_attachment_get_used_by_volume_id(context, volume_id, session=None):
+def volume_attachment_get_all_by_volume_id(context, volume_id, session=None):
     result = model_query(context, models.VolumeAttachment,
                          session=session).\
         filter_by(volume_id=volume_id).\
@@ -1450,7 +1455,7 @@ def volume_attachment_get_used_by_volume_id(context, volume_id, session=None):
 
 
 @require_context
-def volume_attachment_get_by_host(context, volume_id, host):
+def volume_attachment_get_all_by_host(context, volume_id, host):
     session = get_session()
     with session.begin():
         result = model_query(context, models.VolumeAttachment,
@@ -1458,12 +1463,14 @@ def volume_attachment_get_by_host(context, volume_id, host):
             filter_by(volume_id=volume_id).\
             filter_by(attached_host=host).\
             filter(models.VolumeAttachment.attach_status != 'detached').\
-            first()
+            all()
         return result
 
 
 @require_context
-def volume_attachment_get_by_instance_uuid(context, volume_id, instance_uuid):
+def volume_attachment_get_all_by_instance_uuid(context,
+                                               volume_id,
+                                               instance_uuid):
     session = get_session()
     with session.begin():
         result = model_query(context, models.VolumeAttachment,
@@ -1471,7 +1478,7 @@ def volume_attachment_get_by_instance_uuid(context, volume_id, instance_uuid):
             filter_by(volume_id=volume_id).\
             filter_by(instance_uuid=instance_uuid).\
             filter(models.VolumeAttachment.attach_status != 'detached').\
-            first()
+            all()
         return result
 
 
@@ -1693,10 +1700,10 @@ def _process_volume_filters(query, filters):
     # Apply exact match filters for everything else, ensure that the
     # filter value exists on the model
     for key in filters.keys():
-        # metadata is unique, must be a dict
-        if key == 'metadata':
+        # metadata/glance_metadata is unique, must be a dict
+        if key in ('metadata', 'glance_metadata'):
             if not isinstance(filters[key], dict):
-                LOG.debug("'metadata' filter value is not valid.")
+                LOG.debug("'%s' filter value is not valid.", key)
                 return None
             continue
         try:
@@ -1726,6 +1733,11 @@ def _process_volume_filters(query, filters):
             for k, v in value.items():
                 query = query.filter(or_(col_attr.any(key=k, value=v),
                                          col_ad_attr.any(key=k, value=v)))
+        elif key == 'glance_metadata':
+            # use models.Volume.volume_glance_metadata as column attribute key.
+            col_gl_attr = models.Volume.volume_glance_metadata
+            for k, v in value.items():
+                query = query.filter(col_gl_attr.any(key=k, value=v))
         elif isinstance(value, (list, tuple, set, frozenset)):
             # Looking for values in a list; apply to query directly
             column_attr = getattr(models.Volume, key)
@@ -1896,6 +1908,72 @@ def volume_has_attachments_filter():
              ~models.VolumeAttachment.deleted))
 
 
+def volume_has_same_encryption_type(new_vol_type):
+    """Filter to check that encryption matches with new volume type.
+
+    They match if both don't have encryption or both have the same Encryption.
+    """
+    # Query for the encryption in the new volume type
+    encryption_alias = aliased(models.Encryption)
+    new_enc = sql.select((encryption_alias.encryption_id,)).where(and_(
+        ~encryption_alias.deleted,
+        encryption_alias.volume_type_id == new_vol_type))
+
+    # Query for the encryption in the old volume type
+    old_enc = sql.select((models.Encryption.encryption_id,)).where(and_(
+        ~models.Encryption.deleted,
+        models.Encryption.volume_type_id == models.Volume.volume_type_id))
+
+    # NOTE(geguileo): This query is optimizable, but at this moment I can't
+    #                 figure out how.
+    return or_(and_(new_enc.as_scalar().is_(None),
+                    old_enc.as_scalar().is_(None)),
+               new_enc.as_scalar() == old_enc.as_scalar())
+
+
+def volume_qos_allows_retype(new_vol_type):
+    """Filter to check that qos allows retyping the volume to new_vol_type.
+
+    Returned sqlalchemy filter will evaluate to True when volume's status is
+    available or when it's 'in-use' but the qos in new_vol_type is the same as
+    the qos of the volume or when it doesn't exist a consumer spec key that
+    specifies anything other than the back-end in any of the 2 volume_types.
+    """
+    # Query to get the qos of the volume type new_vol_type
+    q = sql.select([models.VolumeTypes.qos_specs_id]).where(and_(
+        ~models.VolumeTypes.deleted,
+        models.VolumeTypes.id == new_vol_type))
+    # Construct the filter to check qos when volume is 'in-use'
+    return or_(
+        # If volume is available
+        models.Volume.status == 'available',
+        # Or both volume types have the same qos specs
+        sql.exists().where(and_(
+            ~models.VolumeTypes.deleted,
+            models.VolumeTypes.id == models.Volume.volume_type_id,
+            models.VolumeTypes.qos_specs_id == q.as_scalar())),
+        # Or they are different specs but they are handled by the backend or
+        # it is not specified.  The way SQL evaluatels value != 'back-end'
+        # makes it result in False not only for 'back-end' values but for
+        # NULL as well, and with the double negation we ensure that we only
+        # allow QoS with 'consumer' values of 'back-end' and NULL.
+        and_(
+            ~sql.exists().where(and_(
+                ~models.VolumeTypes.deleted,
+                models.VolumeTypes.id == models.Volume.volume_type_id,
+                (models.VolumeTypes.qos_specs_id ==
+                 models.QualityOfServiceSpecs.specs_id),
+                models.QualityOfServiceSpecs.key == 'consumer',
+                models.QualityOfServiceSpecs.value != 'back-end')),
+            ~sql.exists().where(and_(
+                ~models.VolumeTypes.deleted,
+                models.VolumeTypes.id == new_vol_type,
+                (models.VolumeTypes.qos_specs_id ==
+                 models.QualityOfServiceSpecs.specs_id),
+                models.QualityOfServiceSpecs.key == 'consumer',
+                models.QualityOfServiceSpecs.value != 'back-end'))))
+
+
 ####################
 
 
@@ -2060,6 +2138,7 @@ def volume_metadata_delete(context, volume_id, key, meta_type):
 
 @require_context
 @require_volume_exists
+@handle_db_data_error
 @_retry_on_deadlock
 def volume_metadata_update(context, volume_id, metadata, delete, meta_type):
     if meta_type == common.METADATA_TYPES.user:
@@ -2103,7 +2182,6 @@ def _volume_admin_metadata_update(context, volume_id, metadata, delete,
 
 
 @require_admin_context
-@require_volume_exists
 def volume_admin_metadata_get(context, volume_id):
     return _volume_admin_metadata_get(context, volume_id)
 
@@ -2120,7 +2198,6 @@ def volume_admin_metadata_delete(context, volume_id, key):
 
 
 @require_admin_context
-@require_volume_exists
 @_retry_on_deadlock
 def volume_admin_metadata_update(context, volume_id, metadata, delete,
                                  add=True, update=True):
@@ -2131,8 +2208,8 @@ def volume_admin_metadata_update(context, volume_id, metadata, delete,
 ###################
 
 
-@handle_db_data_error
 @require_context
+@handle_db_data_error
 def snapshot_create(context, values):
     values['snapshot_metadata'] = _metadata_refs(values.get('metadata'),
                                                  models.SnapshotMetadata)
@@ -2432,6 +2509,7 @@ def _snapshot_metadata_get_item(context, snapshot_id, key, session=None):
 
 @require_context
 @require_snapshot_exists
+@handle_db_data_error
 @_retry_on_deadlock
 def snapshot_metadata_update(context, snapshot_id, metadata, delete):
     session = get_session()
@@ -2884,6 +2962,9 @@ def volume_type_destroy(context, id):
             update({'deleted': True,
                     'deleted_at': timeutils.utcnow(),
                     'updated_at': literal_column('updated_at')})
+        model_query(context, models.VolumeTypeProjects, session=session,
+                    read_deleted="int_no").filter_by(
+            volume_type_id=id).soft_delete(synchronize_session=False)
 
 
 @require_context
@@ -3858,6 +3939,7 @@ def transfer_get_all_by_project(context, project_id):
 
 
 @require_context
+@handle_db_data_error
 def transfer_create(context, values):
     if not values.get('id'):
         values['id'] = str(uuid.uuid4())
@@ -4060,16 +4142,49 @@ def consistencygroup_get_all_by_project(context, project_id, filters=None,
 
 @handle_db_data_error
 @require_context
-def consistencygroup_create(context, values):
-    consistencygroup = models.ConsistencyGroup()
+def consistencygroup_create(context, values, cg_snap_id=None, cg_id=None):
+    cg_model = models.ConsistencyGroup
+
+    values = values.copy()
     if not values.get('id'):
         values['id'] = str(uuid.uuid4())
 
     session = get_session()
     with session.begin():
-        consistencygroup.update(values)
-        session.add(consistencygroup)
+        if cg_snap_id:
+            conditions = [cg_model.id == models.Cgsnapshot.consistencygroup_id,
+                          models.Cgsnapshot.id == cg_snap_id]
+        elif cg_id:
+            conditions = [cg_model.id == cg_id]
+        else:
+            conditions = None
 
+        if conditions:
+            # We don't want duplicated field values
+            values.pop('volume_type_id', None)
+            values.pop('availability_zone', None)
+            values.pop('host', None)
+
+            sel = session.query(cg_model.volume_type_id,
+                                cg_model.availability_zone,
+                                cg_model.host,
+                                *(bindparam(k, v) for k, v in values.items())
+                                ).filter(*conditions)
+            names = ['volume_type_id', 'availability_zone', 'host']
+            names.extend(values.keys())
+            insert_stmt = cg_model.__table__.insert().from_select(names, sel)
+            result = session.execute(insert_stmt)
+            # If we couldn't insert the row because of the conditions raise
+            # the right exception
+            if not result.rowcount:
+                if cg_id:
+                    raise exception.ConsistencyGroupNotFound(
+                        consistencygroup_id=cg_id)
+                raise exception.CgSnapshotNotFound(cgsnapshot_id=cg_snap_id)
+        else:
+            consistencygroup = cg_model()
+            consistencygroup.update(values)
+            session.add(consistencygroup)
         return _consistencygroup_get(context, values['id'], session=session)
 
 
@@ -4102,6 +4217,64 @@ def consistencygroup_destroy(context, consistencygroup_id):
                     'deleted': True,
                     'deleted_at': timeutils.utcnow(),
                     'updated_at': literal_column('updated_at')})
+
+
+def cg_has_cgsnapshot_filter():
+    """Return a filter that checks if a CG has CG Snapshots."""
+    return sql.exists().where(and_(
+        models.Cgsnapshot.consistencygroup_id == models.ConsistencyGroup.id,
+        ~models.Cgsnapshot.deleted))
+
+
+def cg_has_volumes_filter(attached_or_with_snapshots=False):
+    """Return a filter to check if a CG has volumes.
+
+    When attached_or_with_snapshots parameter is given a True value only
+    attached volumes or those with snapshots will be considered.
+    """
+    query = sql.exists().where(
+        and_(models.Volume.consistencygroup_id == models.ConsistencyGroup.id,
+             ~models.Volume.deleted))
+
+    if attached_or_with_snapshots:
+        query = query.where(or_(
+            models.Volume.attach_status == 'attached',
+            sql.exists().where(
+                and_(models.Volume.id == models.Snapshot.volume_id,
+                     ~models.Snapshot.deleted))))
+    return query
+
+
+def cg_creating_from_src(cg_id=None, cgsnapshot_id=None):
+    """Return a filter to check if a CG is being used as creation source.
+
+    Returned filter is meant to be used in the Conditional Update mechanism and
+    checks if provided CG ID or CG Snapshot ID is currently being used to
+    create another CG.
+
+    This filter will not include CGs that have used the ID but have already
+    finished their creation (status is no longer creating).
+
+    Filter uses a subquery that allows it to be used on updates to the
+    consistencygroups table.
+    """
+    # NOTE(geguileo): As explained in devref api_conditional_updates we use a
+    # subquery to trick MySQL into using the same table in the update and the
+    # where clause.
+    subq = sql.select([models.ConsistencyGroup]).where(
+        and_(~models.ConsistencyGroup.deleted,
+             models.ConsistencyGroup.status == 'creating')).alias('cg2')
+
+    if cg_id:
+        match_id = subq.c.source_cgid == cg_id
+    elif cgsnapshot_id:
+        match_id = subq.c.cgsnapshot_id == cgsnapshot_id
+    else:
+        msg = _('cg_creating_from_src must be called with cg_id or '
+                'cgsnapshot_id parameter.')
+        raise exception.ProgrammingError(reason=msg)
+
+    return sql.exists([subq]).where(match_id)
 
 
 ###############################
@@ -4176,20 +4349,48 @@ def cgsnapshot_get_all_by_project(context, project_id, filters=None):
 @handle_db_data_error
 @require_context
 def cgsnapshot_create(context, values):
-    cgsnapshot = models.Cgsnapshot()
     if not values.get('id'):
         values['id'] = str(uuid.uuid4())
 
+    cg_id = values.get('consistencygroup_id')
     session = get_session()
+    model = models.Cgsnapshot
     with session.begin():
-        cgsnapshot.update(values)
-        session.add(cgsnapshot)
+        if cg_id:
+            # There has to exist at least 1 volume in the CG and the CG cannot
+            # be updating the composing volumes or being created.
+            conditions = [
+                sql.exists().where(and_(
+                    ~models.Volume.deleted,
+                    models.Volume.consistencygroup_id == cg_id)),
+                ~models.ConsistencyGroup.deleted,
+                models.ConsistencyGroup.id == cg_id,
+                ~models.ConsistencyGroup.status.in_(('creating', 'updating'))]
 
+            # NOTE(geguileo): We build a "fake" from_select clause instead of
+            # using transaction isolation on the session because we would need
+            # SERIALIZABLE level and that would have a considerable performance
+            # penalty.
+            binds = (bindparam(k, v) for k, v in values.items())
+            sel = session.query(*binds).filter(*conditions)
+            insert_stmt = model.__table__.insert().from_select(values.keys(),
+                                                               sel)
+            result = session.execute(insert_stmt)
+            # If we couldn't insert the row because of the conditions raise
+            # the right exception
+            if not result.rowcount:
+                msg = _("Source CG cannot be empty or in 'creating' or "
+                        "'updating' state. No cgsnapshot will be created.")
+                raise exception.InvalidConsistencyGroup(reason=msg)
+        else:
+            cgsnapshot = model()
+            cgsnapshot.update(values)
+            session.add(cgsnapshot)
         return _cgsnapshot_get(context, values['id'], session=session)
 
 
-@handle_db_data_error
 @require_context
+@handle_db_data_error
 def cgsnapshot_update(context, cgsnapshot_id, values):
     session = get_session()
     with session.begin():
@@ -4218,6 +4419,17 @@ def cgsnapshot_destroy(context, cgsnapshot_id):
                     'updated_at': literal_column('updated_at')})
 
 
+def cgsnapshot_creating_from_src():
+    """Get a filter that checks if a CGSnapshot is being created from a CG."""
+    return sql.exists().where(and_(
+        models.Cgsnapshot.consistencygroup_id == models.ConsistencyGroup.id,
+        ~models.Cgsnapshot.deleted,
+        models.Cgsnapshot.status == 'creating'))
+
+
+###############################
+
+
 @require_admin_context
 def purge_deleted_rows(context, age_in_days):
     """Purge deleted rows older than age from cinder tables."""
@@ -4243,9 +4455,12 @@ def purge_deleted_rows(context, age_in_days):
                 and hasattr(model_class, "deleted"):
             tables.append(model_class.__tablename__)
 
-    # Reorder the list so the volumes table is last to avoid FK constraints
-    tables.remove("volumes")
-    tables.append("volumes")
+    # Reorder the list so the volumes and volume_types tables are last
+    # to avoid FK constraints
+    for table in ("volume_types", "volumes"):
+        tables.remove(table)
+        tables.append(table)
+
     for table in tables:
         t = Table(table, metadata, autoload=True)
         LOG.info(_LI('Purging deleted rows older than age=%(age)d days '
@@ -4290,28 +4505,74 @@ def _translate_message(message):
     }
 
 
-@require_context
-def message_get(context, message_id):
+def _message_get(context, message_id, session=None):
     query = model_query(context,
                         models.Message,
                         read_deleted="no",
-                        project_only="yes")
+                        project_only="yes",
+                        session=session)
     result = query.filter_by(id=message_id).first()
     if not result:
         raise exception.MessageNotFound(message_id=message_id)
+    return result
+
+
+@require_context
+def message_get(context, message_id, session=None):
+    result = _message_get(context, message_id, session)
     return _translate_message(result)
 
 
 @require_context
-def message_get_all(context):
-    """Fetch all messages for the contexts project."""
+def message_get_all(context, filters=None, marker=None, limit=None,
+                    offset=None, sort_keys=None, sort_dirs=None):
+    """Retrieves all messages.
+
+    If no sort parameters are specified then the returned messages are
+    sorted first by the 'created_at' key and then by the 'id' key in
+    descending order.
+
+    :param context: context to query under
+    :param marker: the last item of the previous page, used to determine the
+                   next page of results to return
+    :param limit: maximum number of items to return
+    :param sort_keys: list of attributes by which results should be sorted,
+                      paired with corresponding item in sort_dirs
+    :param sort_dirs: list of directions in which results should be sorted,
+                      paired with corresponding item in sort_keys
+    :param filters: dictionary of filters; values that are in lists, tuples,
+                    or sets cause an 'IN' operation, while exact matching
+                    is used for other values, see
+                    _process_messages_filters function for more
+                    information
+    :returns: list of matching messages
+    """
     messages = models.Message
-    query = (model_query(context,
-                         messages,
-                         read_deleted="no",
-                         project_only="yes"))
-    results = query.all()
-    return _translate_messages(results)
+
+    session = get_session()
+    with session.begin():
+        # Generate the paginate query
+        query = _generate_paginate_query(context, session, marker,
+                                         limit, sort_keys, sort_dirs, filters,
+                                         offset, messages)
+        if query is None:
+            return []
+        results = query.all()
+        return _translate_messages(results)
+
+
+def _process_messages_filters(query, filters):
+    if filters:
+        # Ensure that filters' keys exist on the model
+        if not is_valid_model_filters(models.Message, filters):
+            return None
+        query = query.filter_by(**filters)
+    return query
+
+
+def _messages_get_query(context, session=None, project_only=False):
+    return model_query(context, models.Message, session=session,
+                       project_only=project_only)
 
 
 @require_context
@@ -4342,35 +4603,20 @@ def message_destroy(context, message):
 
 
 @require_context
-def driver_initiator_data_update(context, initiator, namespace, updates):
+def driver_initiator_data_insert_by_key(context, initiator, namespace,
+                                        key, value):
+    data = models.DriverInitiatorData()
+    data.initiator = initiator
+    data.namespace = namespace
+    data.key = key
+    data.value = value
     session = get_session()
-    with session.begin():
-        set_values = updates.get('set_values', {})
-        for key, value in set_values.items():
-            data = session.query(models.DriverInitiatorData).\
-                filter_by(initiator=initiator).\
-                filter_by(namespace=namespace).\
-                filter_by(key=key).\
-                first()
-
-            if data:
-                data.update({'value': value})
-                data.save(session=session)
-            else:
-                data = models.DriverInitiatorData()
-                data.initiator = initiator
-                data.namespace = namespace
-                data.key = key
-                data.value = value
-                session.add(data)
-
-        remove_values = updates.get('remove_values', [])
-        for key in remove_values:
-            session.query(models.DriverInitiatorData).\
-                filter_by(initiator=initiator).\
-                filter_by(namespace=namespace).\
-                filter_by(key=key).\
-                delete()
+    try:
+        with session.begin():
+            session.add(data)
+        return True
+    except db_exc.DBDuplicateEntry:
+        return False
 
 
 @require_context
@@ -4396,7 +4642,9 @@ PAGINATION_HELPERS = {
                          _volume_type_get_db_object),
     models.ConsistencyGroup: (_consistencygroups_get_query,
                               _process_consistencygroups_filters,
-                              _consistencygroup_get)
+                              _consistencygroup_get),
+    models.Message: (_messages_get_query, _process_messages_filters,
+                     _message_get)
 }
 
 
@@ -4463,6 +4711,17 @@ def image_volume_cache_get_all_for_host(context, host):
 
 
 ###############################
+
+
+@require_context
+def resource_exists(context, model, resource_id):
+    # Match non deleted resources by the id
+    conditions = [model.id == resource_id, ~model.deleted]
+    # If the context is not admin we limit it to the context's project
+    if is_user_context(context) and hasattr(model, 'project_id'):
+        conditions.append(model.project_id == context.project_id)
+    query = get_session().query(sql.exists().where(and_(*conditions)))
+    return query.scalar()
 
 
 def get_model_for_versioned_object(versioned_object):
@@ -4563,11 +4822,35 @@ def is_orm_value(obj):
                             sqlalchemy.sql.expression.ColumnElement))
 
 
-@_retry_on_deadlock
+def _check_is_not_multitable(values, model):
+    """Check that we don't try to do multitable updates.
+
+    Since PostgreSQL doesn't support multitable updates we want to always fail
+    if we have such a query in our code, even if with MySQL it would work.
+    """
+    used_models = set()
+    for field in values:
+        if isinstance(field, sqlalchemy.orm.attributes.InstrumentedAttribute):
+            used_models.add(field.class_)
+        elif isinstance(field, six.string_types):
+            used_models.add(model)
+        else:
+            raise exception.ProgrammingError(
+                reason='DB Conditional update - Unknown field type, must be '
+                       'string or ORM field.')
+        if len(used_models) > 1:
+            raise exception.ProgrammingError(
+                reason='DB Conditional update - Error in query, multitable '
+                       'updates are not supported.')
+
+
 @require_context
+@_retry_on_deadlock
 def conditional_update(context, model, values, expected_values, filters=(),
-                       include_deleted='no', project_only=False):
+                       include_deleted='no', project_only=False, order=None):
     """Compare-and-swap conditional update SQLAlchemy implementation."""
+    _check_is_not_multitable(values, model)
+
     # Provided filters will become part of the where clause
     where_conds = list(filters)
 
@@ -4577,16 +4860,60 @@ def conditional_update(context, model, values, expected_values, filters=(),
             condition = db.Condition(condition, field)
         where_conds.append(condition.get_filter(model, field))
 
-    # Transform case values
-    values = {field: case(value.whens, value.value, value.else_)
-              if isinstance(value, db.Case)
-              else value
-              for field, value in values.items()}
-
+    # Create the query with the where clause
     query = model_query(context, model, read_deleted=include_deleted,
-                        project_only=project_only)
+                        project_only=project_only).filter(*where_conds)
+
+    # NOTE(geguileo): Some DBs' update method are order dependent, and they
+    # behave differently depending on the order of the values, example on a
+    # volume with 'available' status:
+    #    UPDATE volumes SET previous_status=status, status='reyping'
+    #        WHERE id='44f284f9-877d-4fce-9eb4-67a052410054';
+    # Will result in a volume with 'retyping' status and 'available'
+    # previous_status both on SQLite and MariaDB, but
+    #    UPDATE volumes SET status='retyping', previous_status=status
+    #        WHERE id='44f284f9-877d-4fce-9eb4-67a052410054';
+    # Will yield the same result in SQLite but will result in a volume with
+    # status and previous_status set to 'retyping' in MariaDB, which is not
+    # what we want, so order must be taken into consideration.
+    # Order for the update will be:
+    #  1- Order specified in argument order
+    #  2- Values that refer to other ORM field (simple and using operations,
+    #     like size + 10)
+    #  3- Values that use Case clause (since they may be using fields as well)
+    #  4- All other values
+    order = list(order) if order else tuple()
+    orm_field_list = []
+    case_list = []
+    unordered_list = []
+    for key, value in values.items():
+        if isinstance(value, db.Case):
+            value = case(value.whens, value.value, value.else_)
+
+        if key in order:
+            order[order.index(key)] = (key, value)
+            continue
+        # NOTE(geguileo): Check Case first since it's a type of orm value
+        if isinstance(value, sql.elements.Case):
+            value_list = case_list
+        elif is_orm_value(value):
+            value_list = orm_field_list
+        else:
+            value_list = unordered_list
+        value_list.append((key, value))
+
+    update_args = {'synchronize_session': False}
+
+    # If we don't have to enforce any kind of order just pass along the values
+    # dictionary since it will be a little more efficient.
+    if order or orm_field_list or case_list:
+        # If we are doing an update with ordered parameters, we need to add
+        # remaining values to the list
+        values = itertools.chain(order, orm_field_list, case_list,
+                                 unordered_list)
+        # And we have to tell SQLAlchemy that we want to preserve the order
+        update_args['update_args'] = {'preserve_parameter_order': True}
 
     # Return True if we were able to change any DB entry, False otherwise
-    result = query.filter(*where_conds).update(values,
-                                               synchronize_session=False)
+    result = query.update(values, **update_args)
     return 0 != result

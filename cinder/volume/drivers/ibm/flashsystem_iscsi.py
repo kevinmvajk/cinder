@@ -33,8 +33,8 @@ import six
 
 from cinder import exception
 from cinder.i18n import _, _LE, _LW
+from cinder import interface
 from cinder import utils
-import cinder.volume.driver
 from cinder.volume.drivers.ibm import flashsystem_common as fscommon
 from cinder.volume.drivers.san import san
 
@@ -51,8 +51,8 @@ CONF = cfg.CONF
 CONF.register_opts(flashsystem_iscsi_opts)
 
 
-class FlashSystemISCSIDriver(fscommon.FlashSystemDriver,
-                             cinder.volume.driver.ISCSIDriver):
+@interface.volumedriver
+class FlashSystemISCSIDriver(fscommon.FlashSystemDriver):
     """IBM FlashSystem iSCSI volume driver.
 
     Version history:
@@ -70,10 +70,16 @@ class FlashSystemISCSIDriver(fscommon.FlashSystemDriver,
                 terminate_connection
         1.0.7 - Fix bug #1505477, add host name check in
                 _find_host_exhaustive for FC
-
+        1.0.8 - Fix bug #1572743, multi-attach attribute
+                should not be hardcoded, only in iSCSI
+        1.0.9 - Fix bug #1570574, Cleanup host resource
+                leaking, changes only in iSCSI
+        1.0.10 - Fix bug #1585085, add host name check in
+                 _find_host_exhaustive for iSCSI
+        1.0.11 - Update driver to use ABC metaclasses
     """
 
-    VERSION = "1.0.7"
+    VERSION = "1.0.11"
 
     def __init__(self, *args, **kwargs):
         super(FlashSystemISCSIDriver, self).__init__(*args, **kwargs)
@@ -142,19 +148,28 @@ class FlashSystemISCSIDriver(fscommon.FlashSystemDriver,
         return host_name
 
     def _find_host_exhaustive(self, connector, hosts):
-        for host in hosts:
+        LOG.debug('enter: _find_host_exhaustive hosts: %s.', hosts)
+        hname = connector['host']
+        hnames = [ihost[0:ihost.rfind('-')] for ihost in hosts]
+        if hname in hnames:
+            host = hosts[hnames.index(hname)]
             ssh_cmd = ['svcinfo', 'lshost', '-delim', '!', host]
             out, err = self._ssh(ssh_cmd)
             self._assert_ssh_return(
                 out.strip(),
                 '_find_host_exhaustive', ssh_cmd, out, err)
             for attr_line in out.split('\n'):
-                # If '!' not found, return the string and two empty strings
                 attr_name, foo, attr_val = attr_line.partition('!')
                 if (attr_name == 'iscsi_name' and
                         'initiator' in connector and
                         attr_val == connector['initiator']):
+                    LOG.debug(
+                        'leave: _find_host_exhaustive connector: %s.',
+                        connector)
                     return host
+        else:
+            LOG.warning(_LW('Host %(host)s was not found on backend storage.'),
+                        {'host': hname})
         return None
 
     def _get_vdisk_map_properties(
@@ -280,7 +295,12 @@ class FlashSystemISCSIDriver(fscommon.FlashSystemDriver,
 
         vdisk_name = volume['name']
         self._wait_vdisk_copy_completed(vdisk_name)
-        self._unmap_vdisk_from_host(vdisk_name, connector)
+        host_name = self._unmap_vdisk_from_host(vdisk_name, connector)
+        # checking if host_name none, if not then, check if the host has
+        # any mappings, if not the host gets deleted.
+        if host_name:
+            if not self._get_hostvdisk_mappings(host_name):
+                self._delete_host(host_name)
 
         LOG.debug(
             'leave: terminate_connection: volume %(vol)s with '

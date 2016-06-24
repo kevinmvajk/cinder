@@ -14,6 +14,7 @@
 #    under the License.
 
 import ast
+import math
 import os.path
 
 from oslo_config import cfg
@@ -2677,7 +2678,8 @@ class EMCVMAXCommon(object):
 
         for snapshot in snapshots:
             snapshots_model_update.append(
-                {'id': snapshot['id'], 'status': 'available'})
+                {'id': snapshot['id'],
+                 'status': fields.SnapshotStatus.AVAILABLE})
         modelUpdate = {'status': fields.ConsistencyGroupStatus.AVAILABLE}
 
         return modelUpdate, snapshots_model_update
@@ -2716,7 +2718,8 @@ class EMCVMAXCommon(object):
                 snapshots, extraSpecs)
             for snapshot in snapshots:
                 snapshots_model_update.append(
-                    {'id': snapshot['id'], 'status': 'deleted'})
+                    {'id': snapshot['id'],
+                     'status': fields.SnapshotStatus.DELETED})
         except Exception:
             exceptionMessage = (_("Failed to delete snapshot for cg: "
                                   "%(cgId)s.")
@@ -4121,7 +4124,7 @@ class EMCVMAXCommon(object):
                                                          arrayName, deviceId))
         volumeInstance = self.conn.GetInstance(volumeInstanceName)
         byteSize = self.utils.get_volume_size(self.conn, volumeInstance)
-        gbSize = int(byteSize) / units.Gi
+        gbSize = int(math.ceil(float(byteSize) / units.Gi))
         LOG.debug(
             "Size of volume %(deviceID)s is %(volumeSize)s GB.",
             {'deviceID': deviceId,

@@ -14,6 +14,7 @@
 
 import ddt
 import mock
+import requests
 from requests import models
 import uuid
 
@@ -4647,27 +4648,27 @@ class DellSCSanAPITestCase(test.TestCase):
         self.assertIsNone(res, 'Expected None')
 
     @mock.patch.object(dell_storagecenter_api.HttpClient,
-                       'post',
+                       'put',
                        return_value=RESPONSE_200)
     def test_rename_volume(self,
-                           mock_post,
+                           mock_put,
                            mock_close_connection,
                            mock_open_connection,
                            mock_init):
         res = self.scapi.rename_volume(self.VOLUME, 'newname')
-        self.assertTrue(mock_post.called)
+        self.assertTrue(mock_put.called)
         self.assertTrue(res)
 
     @mock.patch.object(dell_storagecenter_api.HttpClient,
-                       'post',
+                       'put',
                        return_value=RESPONSE_400)
     def test_rename_volume_failure(self,
-                                   mock_post,
+                                   mock_put,
                                    mock_close_connection,
                                    mock_open_connection,
                                    mock_init):
         res = self.scapi.rename_volume(self.VOLUME, 'newname')
-        self.assertTrue(mock_post.called)
+        self.assertTrue(mock_put.called)
         self.assertFalse(res)
 
     @mock.patch.object(dell_storagecenter_api.HttpClient,
@@ -4785,10 +4786,10 @@ class DellSCSanAPITestCase(test.TestCase):
                       'storageProfile': {'name': 'Fake',
                                          'instanceId': 'fakeId'}})
     @mock.patch.object(dell_storagecenter_api.HttpClient,
-                       'post',
+                       'put',
                        return_value=RESPONSE_200)
     def test_update_storage_profile(self,
-                                    mock_post,
+                                    mock_put,
                                     mock_prefs,
                                     mock_close_connection,
                                     mock_open_connection,
@@ -4797,7 +4798,7 @@ class DellSCSanAPITestCase(test.TestCase):
         fake_scvolume = {'name': 'name', 'instanceId': 'id'}
         res = self.scapi.update_storage_profile(fake_scvolume, None)
         self.assertTrue(res)
-        self.assertTrue('fakeId' in repr(mock_post.call_args_list[0]))
+        self.assertTrue('fakeId' in repr(mock_put.call_args_list[0]))
         self.assertEqual(1, LOG.info.call_count)
 
     @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
@@ -5018,8 +5019,7 @@ class DellSCSanAPITestCase(test.TestCase):
         res = self.scapi._update_volume_profiles(scvolume, newid, None)
         self.assertTrue(mock_get_id.called)
         self.assertTrue(mock_get_volume_configuration.called)
-        mock_put.assert_called_once_with(expected_url,
-                                         expected_payload)
+        mock_put.assert_called_once_with(expected_url, expected_payload, True)
         self.assertTrue(res)
 
         # Now do a remove.  (Restarting with the original config so this will
@@ -5028,8 +5028,7 @@ class DellSCSanAPITestCase(test.TestCase):
         res = self.scapi._update_volume_profiles(scvolume, None, existingid)
         self.assertTrue(mock_get_id.called)
         self.assertTrue(mock_get_volume_configuration.called)
-        mock_put.assert_called_with(expected_url,
-                                    expected_payload)
+        mock_put.assert_called_with(expected_url, expected_payload, True)
         self.assertTrue(res)
 
     @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
@@ -5066,8 +5065,7 @@ class DellSCSanAPITestCase(test.TestCase):
         res = self.scapi._update_volume_profiles(scvolume, newid, None)
         self.assertTrue(mock_get_id.called)
         self.assertTrue(mock_get_volume_configuration.called)
-        mock_put.assert_called_once_with(expected_url,
-                                         expected_payload)
+        mock_put.assert_called_once_with(expected_url, expected_payload, True)
         self.assertFalse(res)
 
         # Now do a remove.  (Restarting with the original config so this will
@@ -5076,8 +5074,7 @@ class DellSCSanAPITestCase(test.TestCase):
         res = self.scapi._update_volume_profiles(scvolume, None, existingid)
         self.assertTrue(mock_get_id.called)
         self.assertTrue(mock_get_volume_configuration.called)
-        mock_put.assert_called_with(expected_url,
-                                    expected_payload)
+        mock_put.assert_called_with(expected_url, expected_payload, True)
         self.assertFalse(res)
 
     @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
@@ -5377,7 +5374,7 @@ class DellSCSanAPITestCase(test.TestCase):
         expected_url = 'StorageCenter/ScReplayProfile/100/CreateReplay'
         expected_payload = {'description': replayid, 'expireTime': expire}
         res = self.scapi.snap_cg_replay(profile, replayid, expire)
-        mock_post.assert_called_once_with(expected_url, expected_payload)
+        mock_post.assert_called_once_with(expected_url, expected_payload, True)
         self.assertTrue(mock_get_id.called)
         self.assertTrue(mock_init_cg_volumes.called)
         self.assertTrue(res)
@@ -5404,7 +5401,7 @@ class DellSCSanAPITestCase(test.TestCase):
         expected_url = 'StorageCenter/ScReplayProfile/100/CreateReplay'
         expected_payload = {'description': replayid, 'expireTime': expire}
         res = self.scapi.snap_cg_replay(profile, replayid, expire)
-        mock_post.assert_called_once_with(expected_url, expected_payload)
+        mock_post.assert_called_once_with(expected_url, expected_payload, True)
         self.assertTrue(mock_get_id.called)
         self.assertTrue(mock_init_cg_volumes.called)
         self.assertFalse(res)
@@ -5536,11 +5533,11 @@ class DellSCSanAPITestCase(test.TestCase):
         expected_url = ('StorageCenter/ScReplay/' +
                         self.RPLAYS[0]['instanceId'] +
                         '/Expire')
-        mock_post.assert_any_call(expected_url, {})
+        mock_post.assert_any_call(expected_url, {}, True)
         expected_url = ('StorageCenter/ScReplay/' +
                         self.RPLAYS[1]['instanceId'] +
                         '/Expire')
-        mock_post.assert_any_call(expected_url, {})
+        mock_post.assert_any_call(expected_url, {}, True)
         self.assertTrue(mock_find_cg_replays.called)
         self.assertTrue(res)
 
@@ -5560,7 +5557,7 @@ class DellSCSanAPITestCase(test.TestCase):
                         self.RPLAYS[0]['instanceId'] +
                         '/Expire')
         res = self.scapi.delete_cg_replay({}, '')
-        mock_post.assert_called_once_with(expected_url, {})
+        mock_post.assert_called_once_with(expected_url, {}, True)
         self.assertTrue(mock_find_cg_replays.called)
         self.assertFalse(res)
 
@@ -5612,7 +5609,7 @@ class DellSCSanAPITestCase(test.TestCase):
         expected_payload = {'Name': newname,
                             'VolumeFolder': '1'}
         self.scapi._import_one({'instanceId': '100'}, newname)
-        mock_put.assert_called_once_with(expected_url, expected_payload)
+        mock_put.assert_called_once_with(expected_url, expected_payload, True)
         self.assertTrue(mock_find_volume_folder.called)
         expected_payload = {'Name': newname}
         self.scapi._import_one({'instanceId': '100'}, newname)
@@ -5879,7 +5876,7 @@ class DellSCSanAPITestCase(test.TestCase):
         expected_payload = {'Name': newname}
         self.scapi.unmanage(scvolume)
         self.assertTrue(mock_get_id.called)
-        mock_put.assert_called_once_with(expected_url, expected_payload)
+        mock_put.assert_called_once_with(expected_url, expected_payload, True)
 
     @mock.patch.object(dell_storagecenter_api.HttpClient,
                        'put',
@@ -5902,7 +5899,7 @@ class DellSCSanAPITestCase(test.TestCase):
                           self.scapi.unmanage,
                           scvolume)
         self.assertTrue(mock_get_id.called)
-        mock_put.assert_called_once_with(expected_url, expected_payload)
+        mock_put.assert_called_once_with(expected_url, expected_payload, True)
 
     @mock.patch.object(dell_storagecenter_api.HttpClient,
                        'post',
@@ -6024,8 +6021,12 @@ class DellSCSanAPITestCase(test.TestCase):
         destssn = 65495
         expected = 'StorageCenter/ScReplication/%s' % (
             self.SCREPL[0]['instanceId'])
+        expected_payload = {'DeleteDestinationVolume': True,
+                            'RecycleDestinationVolume': False,
+                            'DeleteRestorePoint': True}
         ret = self.scapi.delete_replication(self.VOLUME, destssn)
-        mock_delete.assert_any_call(expected)
+        mock_delete.assert_any_call(expected, payload=expected_payload,
+                                    async=True)
         self.assertTrue(ret)
 
     @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
@@ -6057,8 +6058,12 @@ class DellSCSanAPITestCase(test.TestCase):
         destssn = 65495
         expected = 'StorageCenter/ScReplication/%s' % (
             self.SCREPL[0]['instanceId'])
+        expected_payload = {'DeleteDestinationVolume': True,
+                            'RecycleDestinationVolume': False,
+                            'DeleteRestorePoint': True}
         ret = self.scapi.delete_replication(self.VOLUME, destssn)
-        mock_delete.assert_any_call(expected)
+        mock_delete.assert_any_call(expected, payload=expected_payload,
+                                    async=True)
         self.assertFalse(ret)
 
     @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
@@ -6106,7 +6111,7 @@ class DellSCSanAPITestCase(test.TestCase):
                                             False,
                                             None,
                                             False)
-        mock_post.assert_any_call('StorageCenter/ScReplication', payload)
+        mock_post.assert_any_call('StorageCenter/ScReplication', payload, True)
         self.assertDictEqual(self.SCREPL[0], ret)
         payload['Type'] = 'Synchronous'
         payload['ReplicateActiveReplay'] = True
@@ -6116,7 +6121,7 @@ class DellSCSanAPITestCase(test.TestCase):
                                             True,
                                             None,
                                             False)
-        mock_post.assert_any_call('StorageCenter/ScReplication', payload)
+        mock_post.assert_any_call('StorageCenter/ScReplication', payload, True)
         self.assertDictEqual(self.SCREPL[0], ret)
         ret = self.scapi.create_replication(self.VOLUME,
                                             str(destssn),
@@ -6124,7 +6129,7 @@ class DellSCSanAPITestCase(test.TestCase):
                                             True,
                                             None,
                                             True)
-        mock_post.assert_any_call('StorageCenter/ScReplication', payload)
+        mock_post.assert_any_call('StorageCenter/ScReplication', payload, True)
         self.assertDictEqual(self.SCREPL[0], ret)
 
     @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
@@ -6171,7 +6176,7 @@ class DellSCSanAPITestCase(test.TestCase):
                                             False,
                                             None,
                                             False)
-        mock_post.assert_any_call('StorageCenter/ScReplication', payload)
+        mock_post.assert_any_call('StorageCenter/ScReplication', payload, True)
         self.assertIsNone(ret)
 
         payload['Type'] = 'Synchronous'
@@ -6182,7 +6187,7 @@ class DellSCSanAPITestCase(test.TestCase):
                                             True,
                                             None,
                                             True)
-        mock_post.assert_any_call('StorageCenter/ScReplication', payload)
+        mock_post.assert_any_call('StorageCenter/ScReplication', payload, True)
         self.assertIsNone(ret)
 
     @mock.patch.object(dell_storagecenter_api.HttpClient,
@@ -6197,7 +6202,7 @@ class DellSCSanAPITestCase(test.TestCase):
                               mock_close_connection,
                               mock_open_connection,
                               mock_init):
-        ret = self.scapi._find_repl_volume('guid', 65495)
+        ret = self.scapi.find_repl_volume('guid', 65495)
         self.assertDictEqual(self.SCREPL[0], ret)
 
     @mock.patch.object(dell_storagecenter_api.HttpClient,
@@ -6212,7 +6217,7 @@ class DellSCSanAPITestCase(test.TestCase):
                                          mock_close_connection,
                                          mock_open_connection,
                                          mock_init):
-        ret = self.scapi._find_repl_volume('guid', 65495)
+        ret = self.scapi.find_repl_volume('guid', 65495)
         self.assertIsNone(ret)
 
     @mock.patch.object(dell_storagecenter_api.HttpClient,
@@ -6227,7 +6232,7 @@ class DellSCSanAPITestCase(test.TestCase):
                                                mock_close_connection,
                                                mock_open_connection,
                                                mock_init):
-        ret = self.scapi._find_repl_volume('guid', 65495)
+        ret = self.scapi.find_repl_volume('guid', 65495)
         self.assertIsNone(ret)
 
     @mock.patch.object(dell_storagecenter_api.HttpClient,
@@ -6238,13 +6243,13 @@ class DellSCSanAPITestCase(test.TestCase):
                                     mock_close_connection,
                                     mock_open_connection,
                                     mock_init):
-        ret = self.scapi._find_repl_volume('guid', 65495)
+        ret = self.scapi.find_repl_volume('guid', 65495)
         self.assertIsNone(ret)
 
     @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
                        'get_screplication')
     @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
-                       '_find_repl_volume')
+                       'find_repl_volume')
     @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
                        'find_volume')
     @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
@@ -6453,7 +6458,8 @@ class DellSCSanAPITestCase(test.TestCase):
         mock_put.return_value = self.RESPONSE_200
         ret = self.scapi.manage_replay(screplay, 'guid')
         self.assertTrue(ret)
-        mock_put.assert_called_once_with('StorageCenter/ScReplay/1', payload)
+        mock_put.assert_called_once_with('StorageCenter/ScReplay/1', payload,
+                                         True)
         mock_put.return_value = self.RESPONSE_400
         ret = self.scapi.manage_replay(screplay, 'guid')
         self.assertFalse(ret)
@@ -6471,10 +6477,233 @@ class DellSCSanAPITestCase(test.TestCase):
         mock_put.return_value = self.RESPONSE_200
         ret = self.scapi.unmanage_replay(screplay)
         self.assertTrue(ret)
-        mock_put.assert_called_once_with('StorageCenter/ScReplay/1', payload)
+        mock_put.assert_called_once_with('StorageCenter/ScReplay/1', payload,
+                                         True)
         mock_put.return_value = self.RESPONSE_400
         ret = self.scapi.unmanage_replay(screplay)
         self.assertFalse(ret)
+
+    @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
+                       '_get_replay_list')
+    def test_find_common_replay(self,
+                                mock_get_replay_list,
+                                mock_close_connection,
+                                mock_open_connection,
+                                mock_init):
+        dreplays = [{'globalIndex': '11111.113'},
+                    {'globalIndex': '11111.112'},
+                    {'globalIndex': '11111.111'}]
+        sreplays = [{'globalIndex': '12345.112'},
+                    {'globalIndex': '12345.111'},
+                    {'globalIndex': '11111.112'},
+                    {'globalIndex': '11111.111'}]
+        xreplays = [{'globalIndex': '12345.112'},
+                    {'globalIndex': '12345.111'}]
+        mock_get_replay_list.side_effect = [dreplays, sreplays,
+                                            dreplays, xreplays]
+        ret = self.scapi.find_common_replay({'instanceId': '12345.1'},
+                                            {'instanceId': '11111.1'})
+        self.assertEqual({'globalIndex': '11111.112'}, ret)
+        ret = self.scapi.find_common_replay(None, {'instanceId': '11111.1'})
+        self.assertIsNone(ret)
+        ret = self.scapi.find_common_replay({'instanceId': '12345.1'}, None)
+        self.assertIsNone(ret)
+        ret = self.scapi.find_common_replay({'instanceId': '12345.1'},
+                                            {'instanceId': '11111.1'})
+        self.assertIsNone(ret)
+
+    @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
+                       '_find_qos')
+    @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
+                       '_get_json')
+    @mock.patch.object(dell_storagecenter_api.HttpClient,
+                       'post')
+    def test_start_replication(self,
+                               mock_post,
+                               mock_get_json,
+                               mock_find_qos,
+                               mock_close_connection,
+                               mock_open_connection,
+                               mock_init):
+        svolume = {'name': 'guida', 'instanceId': '12345.101',
+                   'scSerialNumber': 12345}
+        dvolume = {'name': 'guidb', 'instanceId': '11111.101',
+                   'scSerialNumber': 11111}
+        mock_post.return_value = self.RESPONSE_200
+        mock_get_json.return_value = {'instanceId': '12345.201'}
+        mock_find_qos.return_value = {'instanceId': '12345.1'}
+        expected = {'QosNode': '12345.1',
+                    'SourceVolume': '12345.101',
+                    'StorageCenter': 12345,
+                    'ReplicateActiveReplay': False,
+                    'Type': 'Asynchronous',
+                    'DestinationVolume': '11111.101',
+                    'DestinationStorageCenter': 11111}
+        ret = self.scapi.start_replication(svolume, dvolume, 'Asynchronous',
+                                           'cinderqos', False)
+        self.assertEqual(mock_get_json.return_value, ret)
+        mock_post.assert_called_once_with('StorageCenter/ScReplication',
+                                          expected, True)
+        mock_post.return_value = self.RESPONSE_400
+        ret = self.scapi.start_replication(svolume, dvolume, 'Asynchronous',
+                                           'cinderqos', False)
+        self.assertIsNone(ret)
+        mock_post.return_value = self.RESPONSE_200
+        mock_find_qos.return_value = None
+        ret = self.scapi.start_replication(svolume, dvolume, 'Asynchronous',
+                                           'cinderqos', False)
+        self.assertIsNone(ret)
+        mock_find_qos.return_value = {'instanceId': '12345.1'}
+        ret = self.scapi.start_replication(None, dvolume, 'Asynchronous',
+                                           'cinderqos', False)
+        self.assertIsNone(ret)
+        ret = self.scapi.start_replication(svolume, None, 'Asynchronous',
+                                           'cinderqos', False)
+        self.assertIsNone(ret)
+
+    @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
+                       'find_common_replay')
+    @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
+                       'create_replay')
+    @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
+                       'start_replication')
+    @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
+                       '_get_json')
+    @mock.patch.object(dell_storagecenter_api.HttpClient,
+                       'post')
+    def test_replicate_to_common(self,
+                                 mock_post,
+                                 mock_get_json,
+                                 mock_start_replication,
+                                 mock_create_replay,
+                                 mock_find_common_replay,
+                                 mock_close_connection,
+                                 mock_open_connection,
+                                 mock_init):
+        creplay = {'instanceId': '11111.201'}
+        svolume = {'name': 'guida'}
+        dvolume = {'name': 'guidb', 'volumeFolder': {'instanceId': '11111.1'}}
+        vvolume = {'name': 'guidc'}
+        mock_find_common_replay.return_value = creplay
+        mock_post.return_value = self.RESPONSE_200
+        mock_get_json.return_value = vvolume
+        mock_create_replay.return_value = {'instanceId': '12345.202'}
+        mock_start_replication.return_value = {'instanceId': '12345.203'}
+        # Simple common test.
+        ret = self.scapi.replicate_to_common(svolume, dvolume, 'cinderqos')
+        self.assertEqual(mock_start_replication.return_value, ret)
+        mock_post.assert_called_once_with(
+            'StorageCenter/ScReplay/11111.201/CreateView',
+            {'Name': 'fback:guidb',
+             'Notes': 'Created by Dell Cinder Driver',
+             'VolumeFolder': '11111.1'},
+            True)
+        mock_create_replay.assert_called_once_with(svolume, 'failback', 600)
+        mock_start_replication.assert_called_once_with(svolume, vvolume,
+                                                       'Asynchronous',
+                                                       'cinderqos',
+                                                       False)
+        mock_create_replay.return_value = None
+        # Unable to create a replay.
+        ret = self.scapi.replicate_to_common(svolume, dvolume, 'cinderqos')
+        self.assertIsNone(ret)
+        mock_create_replay.return_value = {'instanceId': '12345.202'}
+        mock_get_json.return_value = None
+        # Create view volume fails.
+        ret = self.scapi.replicate_to_common(svolume, dvolume, 'cinderqos')
+        self.assertIsNone(ret)
+        mock_get_json.return_value = vvolume
+        mock_post.return_value = self.RESPONSE_400
+        # Post call returns an error.
+        ret = self.scapi.replicate_to_common(svolume, dvolume, 'cinderqos')
+        self.assertIsNone(ret)
+        mock_post.return_value = self.RESPONSE_200
+        mock_find_common_replay.return_value = None
+        # No common replay found.
+        ret = self.scapi.replicate_to_common(svolume, dvolume, 'cinderqos')
+        self.assertIsNone(ret)
+
+    @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
+                       'delete_replication')
+    @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
+                       'start_replication')
+    @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
+                       'rename_volume')
+    def test_flip_replication(self,
+                              mock_rename_volume,
+                              mock_start_replication,
+                              mock_delete_replication,
+                              mock_close_connection,
+                              mock_open_connection,
+                              mock_init):
+        svolume = {'scSerialNumber': '12345.1'}
+        dvolume = {'scSerialNumber': '11111.1'}
+        name = 'guid'
+        replicationtype = 'Synchronous'
+        qosnode = 'cinderqos'
+        activereplay = True
+        mock_delete_replication.return_value = True
+        mock_start_replication.return_value = {'instanceId': '11111.101'}
+        mock_rename_volume.return_value = True
+        # Good run.
+        ret = self.scapi.flip_replication(svolume, dvolume, name,
+                                          replicationtype, qosnode,
+                                          activereplay)
+        self.assertTrue(ret)
+        mock_delete_replication.assert_called_once_with(svolume, '11111.1',
+                                                        False)
+        mock_start_replication.assert_called_once_with(dvolume, svolume,
+                                                       replicationtype,
+                                                       qosnode, activereplay)
+        mock_rename_volume.assert_any_call(svolume, 'Cinder repl of guid')
+        mock_rename_volume.assert_any_call(dvolume, 'guid')
+        mock_rename_volume.return_value = False
+        # Unable to rename volumes.
+        ret = self.scapi.flip_replication(svolume, dvolume, name,
+                                          replicationtype, qosnode,
+                                          activereplay)
+        self.assertFalse(ret)
+        mock_rename_volume.return_value = True
+        mock_start_replication.return_value = None
+        # Start replication call fails.
+        ret = self.scapi.flip_replication(svolume, dvolume, name,
+                                          replicationtype, qosnode,
+                                          activereplay)
+        self.assertFalse(ret)
+        mock_delete_replication.return_value = False
+        mock_start_replication.return_value = {'instanceId': '11111.101'}
+        # Delete old replication call fails.
+        ret = self.scapi.flip_replication(svolume, dvolume, name,
+                                          replicationtype, qosnode,
+                                          activereplay)
+        self.assertFalse(ret)
+
+    @mock.patch.object(dell_storagecenter_api.StorageCenterApi,
+                       '_get_json')
+    @mock.patch.object(dell_storagecenter_api.HttpClient,
+                       'get')
+    def test_replication_progress(self,
+                                  mock_get,
+                                  mock_get_json,
+                                  mock_close_connection,
+                                  mock_open_connection,
+                                  mock_init):
+        mock_get.return_value = self.RESPONSE_200
+        mock_get_json.return_value = {'synced': True,
+                                      'amountRemaining': '0 Bytes'}
+        # Good run
+        retbool, retnum = self.scapi.replication_progress('11111.101')
+        self.assertTrue(retbool)
+        self.assertEqual(0.0, retnum)
+        # SC replication ID is None.
+        retbool, retnum = self.scapi.replication_progress(None)
+        self.assertIsNone(retbool)
+        self.assertIsNone(retnum)
+        mock_get.return_value = self.RESPONSE_400
+        # Get progress call fails.
+        retbool, retnum = self.scapi.replication_progress('11111.101')
+        self.assertIsNone(retbool)
+        self.assertIsNone(retnum)
 
 
 class DellSCSanAPIConnectionTestCase(test.TestCase):
@@ -6625,3 +6854,190 @@ class DellSCSanAPIConnectionTestCase(test.TestCase):
                                       mock_post):
         self.scapi.close_connection()
         self.assertTrue(mock_post.called)
+
+
+class DellHttpClientTestCase(test.TestCase):
+
+    """DellSCSanAPIConnectionTestCase
+
+    Class to test the Storage Center API connection using Mock.
+    """
+
+    ASYNCTASK = {"state": "Running",
+                 "methodName": "GetScUserPreferencesDefaults",
+                 "error": "",
+                 "started": True,
+                 "userName": "",
+                 "localizedError": "",
+                 "returnValue": "https://localhost:3033/api/rest/"
+                                "ApiConnection/AsyncTask/1418394170395",
+                 "storageCenter": 0,
+                 "errorState": "None",
+                 "successful": False,
+                 "stepMessage": "Running Method [Object: ScUserPreferences] "
+                                "[Method: GetScUserPreferencesDefaults]",
+                 "localizedStepMessage": "",
+                 "warningList": [],
+                 "totalSteps": 2,
+                 "timeFinished": "1969-12-31T18:00:00-06:00",
+                 "timeStarted": "2015-01-07T14:07:10-06:00",
+                 "currentStep": 1,
+                 "objectTypeName": "ScUserPreferences",
+                 "objectType": "AsyncTask",
+                 "instanceName": "1418394170395",
+                 "instanceId": "1418394170395"}
+
+    # Create a Response object that indicates OK
+    response_ok = models.Response()
+    response_ok.status_code = 200
+    response_ok.reason = u'ok'
+    RESPONSE_200 = response_ok
+
+    # Create a Response object with no content
+    response_nc = models.Response()
+    response_nc.status_code = 204
+    response_nc.reason = u'duplicate'
+    RESPONSE_204 = response_nc
+
+    # Create a Response object is a pure error.
+    response_bad = models.Response()
+    response_bad.status_code = 400
+    response_bad.reason = u'bad request'
+    RESPONSE_400 = response_bad
+
+    def setUp(self):
+        super(DellHttpClientTestCase, self).setUp()
+        self.host = 'localhost'
+        self.port = '3033'
+        self.user = 'johnnyuser'
+        self.password = 'password'
+        self.verify = False
+        self.apiversion = '3.1'
+        self.httpclient = dell_storagecenter_api.HttpClient(
+            self.host, self.port, self.user, self.password,
+            self.verify, self.apiversion)
+
+    def test_get_async_url(self):
+        url = self.httpclient._get_async_url(self.ASYNCTASK)
+        self.assertEqual('api/rest/ApiConnection/AsyncTask/1418394170395', url)
+
+    def test_get_async_url_no_id_on_url(self):
+        badTask = self.ASYNCTASK.copy()
+        badTask['returnValue'] = ('https://localhost:3033/api/rest/'
+                                  'ApiConnection/AsyncTask/')
+        url = self.httpclient._get_async_url(badTask)
+        self.assertEqual('api/rest/ApiConnection/AsyncTask/1418394170395', url)
+
+    def test_get_async_url_none(self):
+        self.assertRaises(AttributeError, self.httpclient._get_async_url, None)
+
+    def test_get_async_url_no_id(self):
+        badTask = self.ASYNCTASK.copy()
+        badTask['returnValue'] = ('https://localhost:3033/api/rest/'
+                                  'ApiConnection/AsyncTask/')
+        badTask['instanceId'] = ''
+        self.assertRaises(exception.VolumeBackendAPIException,
+                          self.httpclient._get_async_url, badTask)
+
+    def test_rest_ret(self):
+        rest_response = self.RESPONSE_200
+        response = self.httpclient._rest_ret(rest_response, False)
+        self.assertEqual(self.RESPONSE_200, response)
+
+    @mock.patch.object(dell_storagecenter_api.HttpClient,
+                       '_wait_for_async_complete',
+                       return_value=RESPONSE_200)
+    def test_rest_ret_async(self,
+                            mock_wait_for_async_complete):
+        mock_rest_response = mock.MagicMock()
+        mock_rest_response.status_code = 202
+        response = self.httpclient._rest_ret(mock_rest_response, True)
+        self.assertEqual(self.RESPONSE_200, response)
+        self.assertTrue(mock_wait_for_async_complete.called)
+
+    def test_rest_ret_async_error(self):
+        mock_rest_response = mock.MagicMock()
+        mock_rest_response.status_code = 400
+        self.assertRaises(exception.VolumeBackendAPIException,
+                          self.httpclient._rest_ret, mock_rest_response, True)
+
+    @mock.patch.object(dell_storagecenter_api.HttpClient,
+                       'get',
+                       return_value=RESPONSE_200)
+    def test_wait_for_async_complete(self,
+                                     mock_get):
+        ret = self.httpclient._wait_for_async_complete(self.ASYNCTASK)
+        self.assertEqual(self.RESPONSE_200, ret)
+
+    @mock.patch.object(dell_storagecenter_api.HttpClient,
+                       '_get_async_url',
+                       return_value=None)
+    def test_wait_for_async_complete_bad_url(self,
+                                             mock_get_async_url):
+        ret = self.httpclient._wait_for_async_complete(self.ASYNCTASK)
+        self.assertIsNone(ret)
+
+    @mock.patch.object(dell_storagecenter_api.HttpClient,
+                       'get',
+                       return_value=RESPONSE_400)
+    def test_wait_for_async_complete_bad_result(self,
+                                                mock_get):
+        ret = self.httpclient._wait_for_async_complete(self.ASYNCTASK)
+        self.assertEqual(self.RESPONSE_400, ret)
+
+    @mock.patch.object(dell_storagecenter_api.HttpClient,
+                       'get',
+                       return_value=RESPONSE_200)
+    def test_wait_for_async_complete_loop(self,
+                                          mock_get):
+        mock_response = mock.MagicMock()
+        mock_response.content = mock.MagicMock()
+        mock_response.json = mock.MagicMock()
+        mock_response.json.side_effect = [self.ASYNCTASK,
+                                          {'objectType': 'ScVol'}]
+        ret = self.httpclient._wait_for_async_complete(self.ASYNCTASK)
+        self.assertEqual(self.RESPONSE_200, ret)
+
+    @mock.patch.object(dell_storagecenter_api.HttpClient,
+                       'get')
+    def test_wait_for_async_complete_get_raises(self,
+                                                mock_get):
+        mock_get.side_effect = (exception.DellDriverRetryableException())
+        self.assertRaises(exception.VolumeBackendAPIException,
+                          self.httpclient._wait_for_async_complete,
+                          self.ASYNCTASK)
+
+    @mock.patch.object(dell_storagecenter_api.HttpClient,
+                       '_rest_ret',
+                       return_value=RESPONSE_200)
+    @mock.patch.object(requests.Session,
+                       'get',
+                       return_value=RESPONSE_200)
+    def test_get(self,
+                 mock_get,
+                 mock_rest_ret):
+        ret = self.httpclient.get('url', False)
+        self.assertEqual(self.RESPONSE_200, ret)
+        mock_rest_ret.assert_called_once_with(self.RESPONSE_200, False)
+        expected_headers = self.httpclient.header.copy()
+        mock_get.assert_called_once_with('https://localhost:3033/api/rest/url',
+                                         headers=expected_headers,
+                                         verify=False)
+
+    @mock.patch.object(dell_storagecenter_api.HttpClient,
+                       '_rest_ret',
+                       return_value=RESPONSE_200)
+    @mock.patch.object(requests.Session,
+                       'get',
+                       return_value=RESPONSE_200)
+    def test_get_async(self,
+                       mock_get,
+                       mock_rest_ret):
+        ret = self.httpclient.get('url', True)
+        self.assertEqual(self.RESPONSE_200, ret)
+        mock_rest_ret.assert_called_once_with(self.RESPONSE_200, True)
+        expected_headers = self.httpclient.header.copy()
+        expected_headers['async'] = True
+        mock_get.assert_called_once_with('https://localhost:3033/api/rest/url',
+                                         headers=expected_headers,
+                                         verify=False)

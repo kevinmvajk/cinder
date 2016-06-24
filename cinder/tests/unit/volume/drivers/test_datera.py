@@ -23,6 +23,9 @@ from cinder.volume.drivers import datera
 from cinder.volume import volume_types
 
 
+datera.DEFAULT_SI_SLEEP = 0.01
+
+
 class DateraVolumeTestCase(test.TestCase):
 
     def setUp(self):
@@ -35,8 +38,8 @@ class DateraVolumeTestCase(test.TestCase):
         self.cfg.datera_api_port = '7717'
         self.cfg.datera_api_version = '1'
         self.cfg.datera_num_replicas = '2'
-        self.cfg.datera_503_timeout = 1
-        self.cfg.datera_503_interval = 1
+        self.cfg.datera_503_timeout = 0.01
+        self.cfg.datera_503_interval = 0.001
         self.cfg.datera_acl_allow_all = False
         self.cfg.datera_debug = False
         self.cfg.san_login = 'user'
@@ -44,8 +47,6 @@ class DateraVolumeTestCase(test.TestCase):
 
         mock_exec = mock.Mock()
         mock_exec.return_value = ('', '')
-
-        datera.DEFAULT_SI_SLEEP = 0.01
 
         self.driver = datera.DateraDriver(execute=mock_exec,
                                           configuration=self.cfg)
@@ -72,9 +73,8 @@ class DateraVolumeTestCase(test.TestCase):
         def _progress_api_return(mock_api):
             if mock_api.retry_count == 1:
                 _bad_vol_ai = stub_single_ai.copy()
-                _bad_vol_ai['storage_instances']['storage-1'
-                                                 ]['volumes']['volume-1'][
-                    'op_status'] = 'unavailable'
+                _bad_vol_ai['storage_instances']['storage-1'][
+                    'volumes']['volume-1']['op_status'] = 'unavailable'
                 return _bad_vol_ai
             else:
                 self.mock_api.retry_count += 1
@@ -154,11 +154,12 @@ class DateraVolumeTestCase(test.TestCase):
                           self.driver.delete_volume, self.volume)
 
     def test_ensure_export_success(self):
-        self.mock_api.side_effect = self._generate_fake_api_request()
-        ctxt = context.get_admin_context()
-        self.assertIsNone(self.driver.ensure_export(ctxt,
-                                                    self.volume,
-                                                    None))
+        with mock.patch('time.sleep'):
+            self.mock_api.side_effect = self._generate_fake_api_request()
+            ctxt = context.get_admin_context()
+            self.assertIsNone(self.driver.ensure_export(ctxt,
+                                                        self.volume,
+                                                        None))
 
     def test_ensure_export_fails(self):
         self.mock_api.side_effect = exception.DateraAPIException
@@ -167,18 +168,23 @@ class DateraVolumeTestCase(test.TestCase):
                           self.driver.ensure_export, ctxt, self.volume, None)
 
     def test_create_export_target_does_not_exist_success(self):
-        self.mock_api.side_effect = self._generate_fake_api_request(
-            targets_exist=False)
-        ctxt = context.get_admin_context()
-        self.assertIsNone(self.driver.create_export(ctxt,
-                                                    self.volume,
-                                                    None))
+        with mock.patch('time.sleep'):
+            self.mock_api.side_effect = self._generate_fake_api_request(
+                targets_exist=False)
+            ctxt = context.get_admin_context()
+            self.assertIsNone(self.driver.create_export(ctxt,
+                                                        self.volume,
+                                                        None))
 
     def test_create_export_fails(self):
-        self.mock_api.side_effect = exception.DateraAPIException
-        ctxt = context.get_admin_context()
-        self.assertRaises(exception.DateraAPIException,
-                          self.driver.create_export, ctxt, self.volume, None)
+        with mock.patch('time.sleep'):
+            self.mock_api.side_effect = exception.DateraAPIException
+            ctxt = context.get_admin_context()
+            self.assertRaises(exception.DateraAPIException,
+                              self.driver.create_export,
+                              ctxt,
+                              self.volume,
+                              None)
 
     def test_initialize_connection_success(self):
         self.mock_api.side_effect = self._generate_fake_api_request()
@@ -187,7 +193,8 @@ class DateraVolumeTestCase(test.TestCase):
         expected = {
             'driver_volume_type': 'iscsi',
             'data': {
-                'target_discovered': False, 'volume_id': 1,
+                'target_discovered': False,
+                'volume_id': self.volume['id'],
                 'target_iqn': ('iqn.2013-05.com.daterainc:c20aba21-6ef6-'
                                '446b-b374-45733b4883ba--ST--storage-1:01:'
                                'sn:34e5b20fbadd3abb'),

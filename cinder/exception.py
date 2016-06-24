@@ -149,6 +149,10 @@ class GlanceConnectionFailed(CinderException):
     message = _("Connection to glance failed: %(reason)s")
 
 
+class ProgrammingError(CinderException):
+    message = _('Programming error in Cinder: %(reason)s')
+
+
 class NotAuthorized(CinderException):
     message = _("Not authorized.")
     code = 403
@@ -237,6 +241,10 @@ class ImageUnacceptable(Invalid):
 
 class DeviceUnavailable(Invalid):
     message = _("The device in the path %(path)s is unavailable: %(reason)s")
+
+
+class SnapshotUnavailable(VolumeBackendAPIException):
+    message = _("The snapshot is unavailable: %(data)s")
 
 
 class InvalidUUID(Invalid):
@@ -532,6 +540,10 @@ class SnapshotLimitExceeded(QuotaError):
     message = _("Maximum number of snapshots allowed (%(allowed)d) exceeded")
 
 
+class UnexpectedOverQuota(QuotaError):
+    message = _("Unexpected over quota on %(name)s.")
+
+
 class BackupLimitExceeded(QuotaError):
     message = _("Maximum number of backups allowed (%(allowed)d) exceeded")
 
@@ -766,6 +778,11 @@ ObjectActionError = obj_exc.ObjectActionError
 ObjectFieldInvalid = obj_exc.ObjectFieldInvalid
 
 
+class CappedVersionUnknown(CinderException):
+    message = _('Unrecoverable Error: Versioned Objects in DB are capped to '
+                'unknown version %(version)s.')
+
+
 class VolumeGroupNotFound(CinderException):
     message = _('Unable to find Volume Group: %(vg_name)s')
 
@@ -779,9 +796,18 @@ class VolumeDeviceNotFound(CinderException):
 
 
 # Driver specific exceptions
+# Dell
+class DellDriverRetryableException(VolumeBackendAPIException):
+    message = _("Retryable Dell Exception encountered")
+
+
 # Pure Storage
 class PureDriverException(VolumeDriverException):
     message = _("Pure Storage Cinder driver failure: %(reason)s")
+
+
+class PureRetryableException(VolumeBackendAPIException):
+    message = _("Retryable Pure Storage Exception encountered")
 
 
 # SolidFire
@@ -1120,3 +1146,8 @@ class GCSApiFailure(BackupDriverException):
 
 class GCSOAuth2Failure(BackupDriverException):
     message = _("Google Cloud Storage oauth2 failure: %(reason)s")
+
+
+# Kaminario K2
+class KaminarioCinderDriverException(VolumeDriverException):
+    message = _("KaminarioCinderDriver failure: %(reason)s")

@@ -236,17 +236,19 @@ def volume_attachment_get(context, attachment_id, session=None):
     return IMPL.volume_attachment_get(context, attachment_id, session)
 
 
-def volume_attachment_get_used_by_volume_id(context, volume_id):
-    return IMPL.volume_attachment_get_used_by_volume_id(context, volume_id)
+def volume_attachment_get_all_by_volume_id(context, volume_id):
+    return IMPL.volume_attachment_get_all_by_volume_id(context, volume_id)
 
 
-def volume_attachment_get_by_host(context, volume_id, host):
-    return IMPL.volume_attachment_get_by_host(context, volume_id, host)
+def volume_attachment_get_all_by_host(context, volume_id, host):
+    return IMPL.volume_attachment_get_all_by_host(context, volume_id, host)
 
 
-def volume_attachment_get_by_instance_uuid(context, volume_id, instance_uuid):
-    return IMPL.volume_attachment_get_by_instance_uuid(context, volume_id,
-                                                       instance_uuid)
+def volume_attachment_get_all_by_instance_uuid(context,
+                                               volume_id,
+                                               instance_uuid):
+    return IMPL.volume_attachment_get_all_by_instance_uuid(context, volume_id,
+                                                           instance_uuid)
 
 
 def volume_update_status_based_on_attachment(context, volume_id):
@@ -264,6 +266,14 @@ def volume_has_undeletable_snapshots_filter():
 
 def volume_has_attachments_filter():
     return IMPL.volume_has_attachments_filter()
+
+
+def volume_has_same_encryption_type(new_vol_type):
+    return IMPL.volume_has_same_encryption_type(new_vol_type)
+
+
+def volume_qos_allows_retype(new_vol_type):
+    return IMPL.volume_qos_allows_retype(new_vol_type)
 
 
 ####################
@@ -984,9 +994,9 @@ def consistencygroup_get_all(context, filters=None, marker=None, limit=None,
                                          sort_dirs=sort_dirs)
 
 
-def consistencygroup_create(context, values):
+def consistencygroup_create(context, values, cg_snap_id=None, cg_id=None):
     """Create a consistencygroup from the values dictionary."""
-    return IMPL.consistencygroup_create(context, values)
+    return IMPL.consistencygroup_create(context, values, cg_snap_id, cg_id)
 
 
 def consistencygroup_get_all_by_project(context, project_id, filters=None,
@@ -1012,6 +1022,36 @@ def consistencygroup_update(context, consistencygroup_id, values):
 def consistencygroup_destroy(context, consistencygroup_id):
     """Destroy the consistencygroup or raise if it does not exist."""
     return IMPL.consistencygroup_destroy(context, consistencygroup_id)
+
+
+def cg_has_cgsnapshot_filter():
+    """Return a filter that checks if a CG has CG Snapshots."""
+    return IMPL.cg_has_cgsnapshot_filter()
+
+
+def cg_has_volumes_filter(attached_or_with_snapshots=False):
+    """Return a filter to check if a CG has volumes.
+
+    When attached_or_with_snapshots parameter is given a True value only
+    attached volumes or those with snapshots will be considered.
+    """
+    return IMPL.cg_has_volumes_filter(attached_or_with_snapshots)
+
+
+def cg_creating_from_src(cg_id=None, cgsnapshot_id=None):
+    """Return a filter to check if a CG is being used as creation source.
+
+    Returned filter is meant to be used in the Conditional Update mechanism and
+    checks if provided CG ID or CG Snapshot ID is currently being used to
+    create another CG.
+
+    This filter will not include CGs that have used the ID but have already
+    finished their creation (status is no longer creating).
+
+    Filter uses a subquery that allows it to be used on updates to the
+    consistencygroups table.
+    """
+    return IMPL.cg_creating_from_src(cg_id, cgsnapshot_id)
 
 
 ###################
@@ -1055,6 +1095,14 @@ def cgsnapshot_destroy(context, cgsnapshot_id):
     return IMPL.cgsnapshot_destroy(context, cgsnapshot_id)
 
 
+def cgsnapshot_creating_from_src():
+    """Get a filter that checks if a CGSnapshot is being created from a CG."""
+    return IMPL.cgsnapshot_creating_from_src()
+
+
+###################
+
+
 def purge_deleted_rows(context, age_in_days):
     """Purge deleted rows older than given age from cinder tables
 
@@ -1071,14 +1119,24 @@ def get_booleans_for_table(table_name):
 ###################
 
 
-def driver_initiator_data_update(context, initiator, namespace, updates):
-    """Create DriverPrivateData from the values dictionary."""
-    return IMPL.driver_initiator_data_update(context, initiator,
-                                             namespace, updates)
+def driver_initiator_data_insert_by_key(context, initiator,
+                                        namespace, key, value):
+    """Updates DriverInitiatorData entry.
+
+    Sets the value for the specified key within the namespace.
+
+    If the entry already exists return False, if it inserted successfully
+    return True.
+    """
+    return IMPL.driver_initiator_data_insert_by_key(context,
+                                                    initiator,
+                                                    namespace,
+                                                    key,
+                                                    value)
 
 
 def driver_initiator_data_get(context, initiator, namespace):
-    """Query for an DriverPrivateData that has the specified key"""
+    """Query for an DriverInitiatorData that has the specified key"""
     return IMPL.driver_initiator_data_get(context, initiator, namespace)
 
 
@@ -1126,8 +1184,11 @@ def message_get(context, message_id):
     return IMPL.message_get(context, message_id)
 
 
-def message_get_all(context):
-    return IMPL.message_get_all(context)
+def message_get_all(context, filters=None, marker=None, limit=None,
+                    offset=None, sort_keys=None, sort_dirs=None):
+    return IMPL.message_get_all(context, filters=filters, marker=marker,
+                                limit=limit, offset=offset,
+                                sort_keys=sort_keys, sort_dirs=sort_dirs)
 
 
 def message_create(context, values):
@@ -1141,6 +1202,10 @@ def message_destroy(context, message_id):
 
 
 ###################
+
+
+def resource_exists(context, model, resource_id):
+    return IMPL.resource_exists(context, model, resource_id)
 
 
 def get_model_for_versioned_object(versioned_object):
@@ -1207,67 +1272,57 @@ def is_orm_value(obj):
 
 
 def conditional_update(context, model, values, expected_values, filters=(),
-                       include_deleted='no', project_only=False):
+                       include_deleted='no', project_only=False, order=None):
     """Compare-and-swap conditional update.
 
-       Update will only occur in the DB if conditions are met.
+    Update will only occur in the DB if conditions are met.
 
-       We have 4 different condition types we can use in expected_values:
-        - Equality:  {'status': 'available'}
-        - Inequality: {'status': vol_obj.Not('deleting')}
-        - In range: {'status': ['available', 'error']
-        - Not in range: {'status': vol_obj.Not(['in-use', 'attaching'])
+    We have 4 different condition types we can use in expected_values:
+     - Equality:  {'status': 'available'}
+     - Inequality: {'status': vol_obj.Not('deleting')}
+     - In range: {'status': ['available', 'error']
+     - Not in range: {'status': vol_obj.Not(['in-use', 'attaching'])
 
-       Method accepts additional filters, which are basically anything that
-       can be passed to a sqlalchemy query's filter method, for example:
-       [~sql.exists().where(models.Volume.id == models.Snapshot.volume_id)]
+    Method accepts additional filters, which are basically anything that can be
+    passed to a sqlalchemy query's filter method, for example:
 
-       We can select values based on conditions using Case objects in the
-       'values' argument. For example:
+    .. code-block:: python
 
-       .. code-block:: python
+     [~sql.exists().where(models.Volume.id == models.Snapshot.volume_id)]
 
-        has_snapshot_filter = sql.exists().where(
-            models.Snapshot.volume_id == models.Volume.id)
-        case_values = db.Case([(has_snapshot_filter, 'has-snapshot')],
-                              else_='no-snapshot')
-        db.conditional_update(context, models.Volume, {'status': case_values},
-                              {'status': 'available'})
+    We can select values based on conditions using Case objects in the 'values'
+    argument. For example:
 
-       And we can use DB fields for example to store previous status in the
-       corresponding field even though we don't know which value is in the db
-       from those we allowed:
+    .. code-block:: python
 
-       .. code-block:: python
+     has_snapshot_filter = sql.exists().where(
+         models.Snapshot.volume_id == models.Volume.id)
+     case_values = db.Case([(has_snapshot_filter, 'has-snapshot')],
+                           else_='no-snapshot')
+     db.conditional_update(context, models.Volume, {'status': case_values},
+                           {'status': 'available'})
 
-        db.conditional_update(context, models.Volume,
-                              {'status': 'deleting',
-                               'previous_status': models.Volume.status},
-                              {'status': ('available', 'error')})
+    And we can use DB fields for example to store previous status in the
+    corresponding field even though we don't know which value is in the db from
+    those we allowed:
 
-       WARNING: SQLAlchemy does not allow selecting order of SET clauses, so
-       for now we cannot do things like:
+    .. code-block:: python
 
-       .. code-block:: python
+     db.conditional_update(context, models.Volume,
+                           {'status': 'deleting',
+                            'previous_status': models.Volume.status},
+                           {'status': ('available', 'error')})
 
-           {'previous_status': model.status, 'status': 'retyping'}
-
-       because it will result in both previous_status and status being set to
-       'retyping'.  Issue has been reported [1] and a patch to fix it [2] has
-       been submitted.
-
-       [1]: https://bitbucket.org/zzzeek/sqlalchemy/issues/3541/
-
-       [2]: https://github.com/zzzeek/sqlalchemy/pull/200
-
-       :param values: Dictionary of key-values to update in the DB.
-       :param expected_values: Dictionary of conditions that must be met
-                               for the update to be executed.
-       :param filters: Iterable with additional filters
-       :param include_deleted: Should the update include deleted items, this
-                               is equivalent to read_deleted
-       :param project_only: Should the query be limited to context's project.
-       :returns: number of db rows that were updated
+    :param values: Dictionary of key-values to update in the DB.
+    :param expected_values: Dictionary of conditions that must be met for the
+                            update to be executed.
+    :param filters: Iterable with additional filters.
+    :param include_deleted: Should the update include deleted items, this is
+                            equivalent to read_deleted.
+    :param project_only: Should the query be limited to context's project.
+    :param order: Specific order of fields in which to update the values
+    :returns number of db rows that were updated.
     """
     return IMPL.conditional_update(context, model, values, expected_values,
-                                   filters, include_deleted, project_only)
+                                   filters, include_deleted, project_only,
+                                   order)

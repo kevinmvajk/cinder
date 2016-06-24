@@ -19,6 +19,7 @@ This driver supports Nimble Storage controller CS-Series.
 
 """
 import functools
+import math
 import random
 import re
 import six
@@ -33,6 +34,7 @@ from suds import client
 
 from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
+from cinder import interface
 from cinder.objects import volume
 from cinder.volume.drivers.san import san
 from cinder.volume import volume_types
@@ -84,6 +86,7 @@ class NimbleAPIException(exception.VolumeBackendAPIException):
     message = _("Unexpected response from Nimble API")
 
 
+@interface.volumedriver
 class NimbleISCSIDriver(san.SanISCSIDriver):
 
     """OpenStack driver to enable Nimble Controller.
@@ -413,7 +416,7 @@ class NimbleISCSIDriver(san.SanISCSIDriver):
         LOG.debug('Volume size : %(size)s  Volume-name : %(name)s',
                   {'size': vol_info['size'], 'name': vol_info['name']})
 
-        return int(vol_info['size'] / units.Gi)
+        return int(math.ceil(float(vol_info['size']) / units.Gi))
 
     def unmanage(self, volume):
         """Removes the specified volume from Cinder management."""
